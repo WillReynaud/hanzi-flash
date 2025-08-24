@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Hanzi Flash — Clean Mobile + Stats</title>
+  <title>Hanzi Flash — Clean Mobile + Corner Stats</title>
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.webmanifest">
@@ -40,7 +40,6 @@
     .pinyin{font-size:6vw;opacity:.9}
     .meaning{font-size:5vw;color:var(--muted)}
     @media (min-width:600px){.pinyin{font-size:28px}.meaning{font-size:22px}}
-    .hint{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:var(--muted);font-size:12px}
     .pill{font-size:11px;color:#cbd1d8;background:#0c0e15;border:1px solid #2a2a33;border-radius:999px;padding:6px 10px}
 
     /* Controls (desktop) */
@@ -61,18 +60,15 @@
     .row{display:flex;gap:10px;justify-content:flex-end}
     .small{font-size:12px;color:var(--muted)}
 
-    /* ---- Mobile épuré : uniquement la carte visible (pas d’indications) ---- */
+    /* ---- Mobile épuré : uniquement la carte visible ---- */
     @media (max-width:640px){
-      header, .controls, .deck-tools, .hint{ display:none !important; }
+      header, .controls, .deck-tools { display:none !important; }
       .wrap{ padding-top: env(safe-area-inset-top); }
       .face{ max-height: 78vh; }
     }
 
-    /* ---- Drag/Swipe animation ---- */
-    .face.dragging{
-      transition:none;
-      will-change: transform, box-shadow;
-    }
+    /* ---- Drag/Swipe animation (horizontale uniquement) ---- */
+    .face.dragging{ transition:none; will-change: transform, box-shadow; }
     .face.drag-right{ box-shadow:0 20px 40px rgba(46,204,113,.25); }
     .face.drag-left { box-shadow:0 20px 40px rgba(255,92,92,.25); }
 
@@ -81,17 +77,23 @@
     .swipe-right { animation: swipeRight .25s ease-out forwards; }
     .swipe-left  { animation: swipeLeft  .25s ease-out forwards; }
 
-    /* ---- Bottom sheet Stats ---- */
-    #statsPanel{ width:100%; max-width:none; background:#0f1118; border-radius:16px 16px 0 0; padding:12px 12px 20px; }
-    #statsPanel .grab{ width:46px; height:5px; border-radius:999px; background:#2a2f39; margin:8px auto 12px; }
-    #statsPanel h2{ font-size:16px; margin:0 0 6px; color:#cdd3da; text-align:center; }
-    #statsPanel .meta{ font-size:12px; color:#9aa0a6; text-align:center; margin-bottom:10px; }
+    /* ---- Stats popover bas-gauche ---- */
+    #statsPopover{
+      position: fixed; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
+      width: min(460px, 92vw); max-height: 55vh; overflow:auto;
+      background:#0f1118; border:1px solid #1e2230; border-radius:14px;
+      padding:12px 12px 14px; display:none; z-index: 20;
+      box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    }
+    #statsPopover h3{ margin:0 0 8px; font-size:15px; color:#cdd3da; }
+    #statsPopover .meta{ font-size:12px; color:#9aa0a6; margin-bottom:8px; }
     #statsTable{ width:100%; border-collapse:collapse; font-size:14px; }
     #statsTable th, #statsTable td{ padding:8px 6px; border-bottom:1px solid #1e2230; }
     #statsTable th{ text-align:left; color:#9aa0a6; font-weight:600; }
     .badge{ display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; }
     .b-good{ background:rgba(46,204,113,.15); color:var(--good); border:1px solid rgba(46,204,113,.3); }
     .b-learn{ background:rgba(255,92,92,.15); color:var(--bad); border:1px solid rgba(255,92,92,.3); }
+    #closeStatsBtn{ margin-top:10px; font-size:12px; color:var(--accent); background:none; border:none; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -105,8 +107,6 @@
       <div class="face" id="face">
         <div class="front">
           <div class="hanzi" id="hanzi">我</div>
-          <!-- hint caché sur mobile -->
-          <div class="hint">tap = retourner • appui long = 🔊 • swipe ←/→ • swipe ↑ = stats</div>
         </div>
         <div class="back">
           <div class="pinyin" id="pinyin">wǒ</div>
@@ -131,12 +131,11 @@
     </div>
   </div>
 
-  <!-- Bottom-sheet Stats -->
-  <dialog id="statsPanel">
-    <div class="grab"></div>
-    <h2>Stats du deck</h2>
+  <!-- Stats popover -->
+  <div id="statsPopover">
+    <h3>Stats du deck</h3>
     <div class="meta" id="statsMeta">–</div>
-    <div style="overflow:auto; max-height:50vh;">
+    <div style="overflow:auto; max-height:45vh;">
       <table id="statsTable">
         <thead>
           <tr><th>Hanzi</th><th>Pinyin</th><th>Statut</th><th>Vues</th></tr>
@@ -144,10 +143,8 @@
         <tbody id="statsBody"></tbody>
       </table>
     </div>
-    <div class="row" style="margin-top:10px;">
-      <button class="link" id="closeStats">Fermer</button>
-    </div>
-  </dialog>
+    <button id="closeStatsBtn">Fermer</button>
+  </div>
 
   <!-- Import TSV -->
   <dialog id="dlg">
@@ -184,7 +181,7 @@
 
   // ====== SRS ======
   const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
-  const LS_KEY = "cn_flash_audio_tsv_v4";
+  const LS_KEY = "cn_flash_audio_tsv_v5";
 
   let state = loadState();
   function loadState(){
@@ -231,11 +228,11 @@
   const cancelDlgBtn = document.getElementById('cancelDlg');
   const saveTsvBtn = document.getElementById('saveTsv');
 
-  // Stats panel
-  const statsPanel = document.getElementById('statsPanel');
+  // Stats popover
+  const statsPopover = document.getElementById('statsPopover');
   const statsMeta = document.getElementById('statsMeta');
   const statsBody = document.getElementById('statsBody');
-  const closeStatsBtn = document.getElementById('closeStats');
+  const closeStatsBtn = document.getElementById('closeStatsBtn');
 
   // ====== Audio + fallback ======
   const player = new Audio(); player.preload="none";
@@ -264,6 +261,7 @@
     const dueCount = state.cards.filter(x=>x.nextDue<=now()).length;
     const mastered = masteredCount();
     statsEl.textContent = `${dueCount} dûes · ${mastered} maîtrisées`;
+    resetFaceTransform(); // sécurité: toujours recentrer visuellement
   }
 
   function masteredCount(){
@@ -272,12 +270,14 @@
   }
 
   function flip(){ state.flipped=!state.flipped; save(); render(); }
+
   function answer(good){
     const c = current();
     c.seen++;
     if(good){ c.good++; c.score = Math.min(c.score+1, INTERVALS.length-1); c.nextDue = now()+INTERVALS[c.score]; }
     else    { c.again++; c.score = Math.max(0, c.score-1); c.nextDue = now()+30e3; }
-    save(); pickNext();
+    save();
+    pickNext();
   }
 
   // ---- Desktop buttons (cachés sur mobile) ----
@@ -314,28 +314,56 @@
     a.href=url; a.download='flashcards-cn-audio.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   });
 
-  // ---- Interactions mobile : tap / appui long / swipe ←/→ + swipe ↑ ----
+  // ===== Helpers reset transform =====
+  function resetFaceTransform(){
+    face.classList.remove('dragging','drag-right','drag-left','swipe-right','swipe-left');
+    face.style.transform = ''; // re-centre visuellement
+  }
+
+  // ---- Interactions mobile : tap / appui long (audio ou stats coin bas-gauche) / swipe ←/→ ----
   face.addEventListener('click', ()=>{ if(!longPressFired) flip(); longPressFired=false; });
 
-  let startX=null,startY=null, longPressTimer=null, longPressFired=false;
+  let startX=null,startY=null, longPressTimer=null, longPressFired=false, longPressMode=null;
+
+  function inBottomLeftCorner(x,y){
+    const r = face.getBoundingClientRect();
+    const withinLeft = (x - r.left) <= r.width * 0.35;       // 35% largeur gauche
+    const withinBottom = (r.bottom - y) <= r.height * 0.35;   // 35% hauteur bas
+    return withinLeft && withinBottom;
+  }
 
   cardArea.addEventListener('touchstart', (e)=>{
     const t = e.changedTouches[0]; startX=t.clientX; startY=t.clientY;
     face.classList.add('dragging');
     longPressFired=false;
-    longPressTimer = setTimeout(()=>{ longPressFired=true; playAudio(); }, 500); // appui long = audio
+    // Détermine si l'appui long vise les stats ou l'audio
+    longPressMode = inBottomLeftCorner(startX, startY) ? 'stats' : 'audio';
+    longPressTimer = setTimeout(()=>{
+      longPressFired = true;
+      if(longPressMode==='stats'){ openStatsPopover(); }
+      else{ playAudio(); }
+    }, 500);
   }, {passive:true});
 
   cardArea.addEventListener('touchmove', (e)=>{
     if(startX===null) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - startX, dy = t.clientY - startY;
+
+    // dès qu'on bouge, on annule l'appui long
     if(Math.abs(dx)>10 || Math.abs(dy)>10){ clearTimeout(longPressTimer); }
-    // suivi du doigt (rotation légère)
-    const rot = dx/20;
-    face.style.transform = `translateX(${dx}px) rotate(${rot}deg) ${state.flipped?'rotateY(180deg)':''}`;
-    face.classList.toggle('drag-right', dx>0);
-    face.classList.toggle('drag-left', dx<0);
+
+    // n'appliquer l'effet de drag QUE si geste majoritairement horizontal
+    if(Math.abs(dx) > Math.abs(dy)){
+      const rot = dx/20;
+      face.style.transform = `translateX(${dx}px) rotate(${rot}deg) ${state.flipped?'rotateY(180deg)':''}`;
+      face.classList.toggle('drag-right', dx>0);
+      face.classList.toggle('drag-left', dx<0);
+    } else {
+      // pas d'animation horizontale → éviter halo rouge/vert parasite
+      face.classList.remove('drag-right','drag-left');
+      face.style.transform = `${state.flipped?'rotateY(180deg)':''}`;
+    }
   }, {passive:true});
 
   cardArea.addEventListener('touchend', (e)=>{
@@ -344,42 +372,43 @@
     const t = e.changedTouches[0];
     const dx = t.clientX - startX, dy = t.clientY - startY;
     const absX = Math.abs(dx), absY = Math.abs(dy);
-    const THX = 60, THY = 80; // seuils
+    const THX = 60; // seuil horizontal
 
-    // reset drag visuals
+    // On retire visuels de drag
     face.classList.remove('dragging','drag-right','drag-left');
 
-    // Swipe haut prioritaire si grand mouvement vertical
-    if(absY > absX && dy < -THY){
-      face.style.transform = ''; // reset
-      openStatsPanel();
-      startX=startY=null; return;
-    }
-
-    // Swipe horizontal (noter)
+    // Swipe horizontal seulement
     if(absX > absY && absX > THX){
       const cls = dx>0 ? 'swipe-right' : 'swipe-left';
       const good = dx>0;
+
+      // 1) anime
       face.classList.add(cls);
-      face.addEventListener('animationend', function handler(){
-        face.classList.remove(cls);
-        face.removeEventListener('animationend', handler);
+
+      // 2) à la fin de l'anim: reset visuel, puis answer() (charge la suivante centrée)
+      const onAnimEnd = ()=>{
+        face.removeEventListener('animationend', onAnimEnd);
+        resetFaceTransform();     // ← re-centre AVANT de passer à la suivante
         answer(good);
-      });
+      };
+      face.addEventListener('animationend', onAnimEnd);
     } else {
-      // petit mouvement → rien (tap géré par click pour flip / appui long déjà joué)
-      face.style.transform = '';
+      // petit mouvement → juste reset
+      resetFaceTransform();
     }
+
     startX=startY=null;
   }, {passive:true});
 
-  // ====== Stats panel ======
-  function openStatsPanel(){
+  // ====== Stats popover ======
+  function openStatsPopover(){
     buildStatsTable();
-    // Positionner en bottom-sheet (plein écran iOS: OK)
-    statsPanel.showModal();
+    statsPopover.style.display = 'block';
   }
-  function closeStatsPanel(){ statsPanel.close(); }
+  function closeStatsPopover(){
+    statsPopover.style.display = 'none';
+  }
+  closeStatsBtn.addEventListener('click', closeStatsPopover);
 
   function buildStatsTable(){
     const maxIdx = INTERVALS.length - 1;
@@ -398,14 +427,6 @@
   }
 
   function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
-
-  // Fermer stats
-  document.getElementById('closeStats').addEventListener('click', closeStatsPanel);
-  statsPanel.addEventListener('click', (e)=>{
-    // clique sur le backdrop pour fermer
-    const rect = statsPanel.getBoundingClientRect();
-    if(e.clientY < rect.top) closeStatsPanel();
-  });
 
   // Boot
   pickNext();
