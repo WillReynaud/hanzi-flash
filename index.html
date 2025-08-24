@@ -372,13 +372,13 @@
     const t = e.changedTouches[0];
     const dx = t.clientX - startX, dy = t.clientY - startY;
     const absX = Math.abs(dx), absY = Math.abs(dy);
-    const THX = 60; // seuil horizontal
+    const THX = 8; // seuil horizontal
 
     // On retire visuels de drag
     face.classList.remove('dragging','drag-right','drag-left');
 
     // Swipe horizontal seulement
-    if(absX > absY && absX > THX){
+    if(absX > absY){
       const cls = dx>0 ? 'swipe-right' : 'swipe-left';
       const good = dx>0;
 
