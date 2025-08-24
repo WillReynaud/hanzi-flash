@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Hanzi Flash — Audio + Import TSV</title>
+<style>
+  :root{--bg:#0b0b0f;--fg:#f3f3f5;--muted:#9aa0a6;--accent:#4f8cff;--good:#2ecc71;--bad:#ff5c5c;--card:#15151b;--card2:#1d1d26}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:680px;margin:0 auto;padding:env(safe-area-inset-top) 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;height:100%}
+  header{display:flex;align-items:center;justify-content:space-between;padding:8px 0;gap:8px}
+  h1{font-size:16px;margin:0;color:var(--muted)}
+  .stats{font-size:12px;color:var(--muted)}
+  .card{flex:1;display:flex;align-items:center;justify-content:center;perspective:1000px;user-select:none;-webkit-user-select:none;touch-action:manipulation;margin:10px 0 14px}
+  .face{width:100%;height:100%;max-height:62vh;border-radius:16px;background:linear-gradient(175deg,var(--card),var(--card2));
+    box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:24px;position:relative;transform-style:preserve-3d;transition:transform .38s ease}
+  .face.flipped{transform:rotateY(180deg)}
+  .front,.back{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;backface-visibility:hidden;-webkit-backface-visibility:hidden;padding:24px}
+  .back{transform:rotateY(180deg)}
+  .hanzi{font-size:16vw;line-height:1;font-weight:600}
+  @media (min-width:600px){.hanzi{font-size:96px}}
+  .pinyin{font-size:6vw;opacity:.9}
+  .meaning{font-size:5vw;color:var(--muted)}
+  @media (min-width:600px){.pinyin{font-size:28px}.meaning{font-size:22px}}
+  .hint{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:var(--muted);font-size:12px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap}
+  .btn{flex:1;border:none;border-radius:14px;padding:14px 16px;font-size:16px;font-weight:600;cursor:pointer}
+  .again{background:rgba(255,92,92,.12);color:var(--bad);border:1px solid rgba(255,92,92,.3)}
+  .flip{background:transparent;border:1px dashed #3a3a46;color:var(--muted);flex:0 0 auto}
+  .good{background:rgba(46,204,113,.12);color:var(--good);border:1px solid rgba(46,204,113,.3)}
+  .sound{background:transparent;border:1px solid #2a2a33;color:var(--fg);flex:0 0 auto}
+  .tool{background:transparent;border:1px solid #2a2a33;color:var(--fg);flex:0 0 auto}
+  .deck-tools{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .link{font-size:12px;color:var(--accent);background:none;border:none;padding:0;text-decoration:underline;cursor:pointer}
+  dialog{border:none;border-radius:14px;background:#11131a;color:var(--fg);max-width:680px;width:92vw;padding:0}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  .sheet{padding:16px;display:flex;flex-direction:column;gap:12px}
+  textarea{width:100%;min-height:40vh;border-radius:10px;background:#0c0e15;color:var(--fg);border:1px solid #2a2a33;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .row{display:flex;gap:10px;justify-content:flex-end}
+  .small{font-size:12px;color:var(--muted)}
+  .pill{font-size:11px;color:#cbd1d8;background:#0c0e15;border:1px solid #2a2a33;border-radius:999px;padding:6px 10px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Hanzi — Audio Flashcards</h1>
+      <div class="stats" id="stats">0 dûes · 0 maîtrisées</div>
+    </header>
+
+    <div class="card" id="cardArea">
+      <div class="face" id="face">
+        <div class="front">
+          <div class="hanzi" id="hanzi">我</div>
+          <div class="hint">Tape/Click pour retourner • swipe ←/→ • double-tap 🔊</div>
+        </div>
+        <div class="back">
+          <div class="pinyin" id="pinyin">wǒ</div>
+          <div class="meaning" id="meaning">je / moi</div>
+          <div class="pill" id="audioInfo" style="display:none;">Audio</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn again" id="btnAgain">Encore</button>
+      <button class="btn flip" id="btnFlip">Retourner</button>
+      <button class="btn good" id="btnGood">OK</button>
+      <button class="btn sound" id="btnSound">🔊 Écouter</button>
+      <button class="btn tool" id="btnImport">Importer TSV</button>
+    </div>
+
+    <div class="deck-tools">
+      <button class="link" id="reset">Remise à zéro</button>
+      <button class="link" id="exportJson">Exporter (JSON)</button>
+    </div>
+  </div>
+
+  <dialog id="dlg">
+    <div class="sheet">
+      <strong>Importer un deck depuis TSV (Excel/Google Sheets)</strong>
+      <div class="small">Colonnes attendues : caractère (A) — pinyin (B) — traduction (C) — URL mp3 (D). Séparateur : tabulation.</div>
+      <textarea id="tsv"></textarea>
+      <div class="row">
+        <button class="link" id="cancelDlg">Annuler</button>
+        <button class="link" id="saveTsv">Importer</button>
+      </div>
+    </div>
+  </dialog>
+
+<script>
+(function(){
+  // ===== TSV par défaut (prérempli depuis ton message) =====
+  const DEFAULT_TSV = `我\twǒ\tje / moi\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%88%91&tl=zh-CN&client=tw-ob
+你\tnǐ\ttu / toi\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BD%A0&tl=zh-CN&client=tw-ob
+他\ttā\til / lui\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BB%96&tl=zh-CN&client=tw-ob
+她\ttā\telle\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A5%B9&tl=zh-CN&client=tw-ob
+我们\twǒmen\tnous\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%88%91%E4%BB%AC&tl=zh-CN&client=tw-ob
+你们\tnǐmen\tvous\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BD%A0%E4%BB%AC&tl=zh-CN&client=tw-ob
+他们\ttāmen\tils / eux\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BB%96%E4%BB%AC&tl=zh-CN&client=tw-ob
+她们\ttāmen\telles\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A5%B9%E4%BB%AC&tl=zh-CN&client=tw-ob
+姓\txìng\ts'appeler (nom de famille)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A7%93&tl=zh-CN&client=tw-ob
+叫\tjiào\ts'appeler (prénom)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8F%AB&tl=zh-CN&client=tw-ob
+学\txué\tétudier\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%AD%A6&tl=zh-CN&client=tw-ob
+是\tshì\têtre\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%AF&tl=zh-CN&client=tw-ob
+生\tshēng\tnaître / élève\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%94%9F&tl=zh-CN&client=tw-ob
+有\tyǒu\tavoir\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%9C%89&tl=zh-CN&client=tw-ob
+说\tshuō\tdire / parler\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%AF%B4&tl=zh-CN&client=tw-ob
+在\tzài\têtre (quelque part)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%9C%A8&tl=zh-CN&client=tw-ob
+去\tqù\taller\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8E%BB&tl=zh-CN&client=tw-ob
+来\tlái\tvenir\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%9D%A5&tl=zh-CN&client=tw-ob
+回\thuí\trevenir\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%9B%9E&tl=zh-CN&client=tw-ob
+住\tzhù\thabiter / demeurer\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BD%8F&tl=zh-CN&client=tw-ob
+工作\tgōngzuò\ttravailler\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%B7%A5%E4%BD%9C&tl=zh-CN&client=tw-ob
+休息\txiūxi\tse reposer\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BC%91%E6%81%AF&tl=zh-CN&client=tw-ob
+找\tzhǎo\tchercher\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%89%BE&tl=zh-CN&client=tw-ob
+问\twèn\tdemander\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E9%97%AE&tl=zh-CN&client=tw-ob
+喝\thē\tboire\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%96%9D&tl=zh-CN&client=tw-ob
+想\txiâng\tvouloir\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%83%B3&tl=zh-CN&client=tw-ob
+知道\tzhīdào\tsavoir\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%9F%A5%E9%81%93&tl=zh-CN&client=tw-ob
+看\tkàn\tvoir / observer\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%9C%8B&tl=zh-CN&client=tw-ob
+不\tbù\tnégation\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%8D&tl=zh-CN&client=tw-ob
+没\tméi\tnégation (passé)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%B2%A1&tl=zh-CN&client=tw-ob
+呢\tne\tparticule interrogative\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%91%A2&tl=zh-CN&client=tw-ob
+吗\tma\tparticule interrogative\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%90%97&tl=zh-CN&client=tw-ob
+吧\tba\tparticule de suggestion\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%90%A7&tl=zh-CN&client=tw-ob
+什么\tshénme\tquoi / que\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BB%80%E4%B9%88&tl=zh-CN&client=tw-ob
+哪\tnǎ\tquel / lequel\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%93%AA&tl=zh-CN&client=tw-ob
+几\tjǐ\tcombien (petit nombre) / quelques\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%87%A0&tl=zh-CN&client=tw-ob
+谁\tshéi\tqui ?\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%B0%81&tl=zh-CN&client=tw-ob
+也\tyě\taussi\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B9%9F&tl=zh-CN&client=tw-ob
+这\tzhè\tce / cette\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%BF%99&tl=zh-CN&client=tw-ob
+的\tde\tparticule possessive\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%9A%84&tl=zh-CN&client=tw-ob
+个\tgè\tclassificateur général\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%AA&tl=zh-CN&client=tw-ob
+两\tliǎng\tdeux (quantité)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%A4&tl=zh-CN&client=tw-ob
+本\tběn\tclassificateur pour les livres / racine / origine / fondamentale\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%9C%AC&tl=zh-CN&client=tw-ob
+口\tkǒu\tclassificateur membres famille / bouche\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8F%A3&tl=zh-CN&client=tw-ob
+一\tyī\tun\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%80&tl=zh-CN&client=tw-ob
+二\tèr\tdeux\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BA%8C&tl=zh-CN&client=tw-ob
+三\tsān\ttrois\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%89&tl=zh-CN&client=tw-ob
+四\tsì\tquatre\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%9B%9B&tl=zh-CN&client=tw-ob
+五\twǔ\tcinq\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BA%94&tl=zh-CN&client=tw-ob
+六\tliù\tsix\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%85%AD&tl=zh-CN&client=tw-ob
+七\tqī\tsept\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%83&tl=zh-CN&client=tw-ob
+八\tbā\thuit\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%85%AB&tl=zh-CN&client=tw-ob
+九\tjiǔ\tneuf\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B9%9D&tl=zh-CN&client=tw-ob
+十\tshí\tdix\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8D%81&tl=zh-CN&client=tw-ob
+多少\tduōshǎo\tcombien ?\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A4%9A%E5%B0%91&tl=zh-CN&client=tw-ob
+多大\tduō dà\tquel âge ?\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A4%9A%E5%A4%A7&tl=zh-CN&client=tw-ob
+岁\tsuì\tâge\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%B2%81&tl=zh-CN&client=tw-ob
+几岁\tjǐ suì\tPour les enfants (moins de 10 ans)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%87%A0%E5%B2%81&tl=zh-CN&client=tw-ob
+您多大年纪\tNín duō dà niánjì ?\tPour être poli avec des personnes âgées\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%82%A8%E5%A4%9A%E5%A4%A7%E5%B9%B4%E7%BA%AA&tl=zh-CN&client=tw-ob
+在\tzài\têtre (quelque part)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%9C%A8&tl=zh-CN&client=tw-ob
+哪儿\tnǎr\toù\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%93%AA%E5%84%BF&tl=zh-CN&client=tw-ob
+年\tnián\tannée\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%B9%B4&tl=zh-CN&client=tw-ob
+星期\txīngqī\tsemaine\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%9F%E6%9C%9F&tl=zh-CN&client=tw-ob
+日\trì\tjour\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%97%A5&tl=zh-CN&client=tw-ob
+号\thào\tjour/date (oral)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8F%B7&tl=zh-CN&client=tw-ob
+月\tyuè\tmois\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%9C%88&tl=zh-CN&client=tw-ob
+星期日\txīngqīrì\tdimanche\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%9F%E6%9C%9F%E6%97%A5&tl=zh-CN&client=tw-ob
+生日\tshēngrì\tanniversaire\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%94%9F%E6%97%A5&tl=zh-CN&client=tw-ob
+几\tjǐ\tcombien (petit nombre / heure / âge)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%87%A0&tl=zh-CN&client=tw-ob
+今天\tjīntiān\taujourd'hui\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BB%8A%E5%A4%A9&tl=zh-CN&client=tw-ob
+明天\tmíngtiān\tdemain\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%8E%E5%A4%A9&tl=zh-CN&client=tw-ob
+昨天\tzuótiān\thier\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%A8%E5%A4%A9&tl=zh-CN&client=tw-ob
+上午\tshàngwǔ\tmatin\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%8A%E5%8D%88&tl=zh-CN&client=tw-ob
+中午\tzhōngwǔ\tmidi\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%AD%E5%8D%88&tl=zh-CN&client=tw-ob
+下午\txiàwǔ\taprès-midi\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%8B%E5%8D%88&tl=zh-CN&client=tw-ob
+早上\tzǎoshang\tmatin (très tôt)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%97%A9%E4%B8%8A&tl=zh-CN&client=tw-ob
+晚上\twǎnshang\tsoir\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%99%9A%E4%B8%8A&tl=zh-CN&client=tw-ob
+今年\tjīnnián\tcette année\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BB%8A%E5%B9%B4&tl=zh-CN&client=tw-ob
+明年\tmíngnián\tl'année prochaine\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%8E%E5%B9%B4&tl=zh-CN&client=tw-ob
+去年\tqùnián\tl'année dernière\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8E%BB%E5%B9%B4&tl=zh-CN&client=tw-ob
+钟\tzhōng\thorloge / utilisé pour l'heure précise\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E9%92%9F&tl=zh-CN&client=tw-ob
+点\tdiǎn\tpoint / unité de compte pour l'heure\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%82%B9&tl=zh-CN&client=tw-ob
+分\tfēn\tminute\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%88%86&tl=zh-CN&client=tw-ob
+刻\tkè\tquart d'heure\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%88%BB&tl=zh-CN&client=tw-ob
+半\tbàn\tdemi (30 minutes)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8D%8A&tl=zh-CN&client=tw-ob
+三点钟\tsān diǎn zhōng\t3 heures\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%89%E7%82%B9%E9%92%9F&tl=zh-CN&client=tw-ob
+三点五分\tsān diǎn wǔ fēn\t3h05\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%89%E7%82%B9%E4%BA%94%E5%88%86&tl=zh-CN&client=tw-ob
+六点一刻\tliù diǎn yī kè\t6h15\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%85%AD%E7%82%B9%E4%B8%80%E5%88%BB&tl=zh-CN&client=tw-ob
+六点半\tliù diǎn bàn\t6h30\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%85%AD%E7%82%B9%E5%8D%8A&tl=zh-CN&client=tw-ob
+七点差一刻\tqī diǎn chà yī kè\t6h45\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%83%E7%82%B9%E5%B7%AE%E4%B8%80%E5%88%BB&tl=zh-CN&client=tw-ob
+六点三刻\tliù diǎn sān kè\t6h45 (alternative)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%85%AD%E7%82%B9%E4%B8%89%E5%88%BB&tl=zh-CN&client=tw-ob
+好\thǎo\tbien\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A5%BD&tl=zh-CN&client=tw-ob
+大\tdà\tgrand\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A4%A7&tl=zh-CN&client=tw-ob
+小\txiǎo\tpetit\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%B0%8F&tl=zh-CN&client=tw-ob
+老\tlǎo\tvieux\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%80%81&tl=zh-CN&client=tw-ob
+过\tguò\t(passé d'expérience)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%BF%87&tl=zh-CN&client=tw-ob
+名字\tmíngzi\tprénom\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%90%8D%E5%AD%97&tl=zh-CN&client=tw-ob
+姓\txìng\tnom de famille\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A7%93&tl=zh-CN&client=tw-ob
+人\trén\tpersonne\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BA%BA&tl=zh-CN&client=tw-ob
+这个人\tzhè ge rén\tcette personne-ci\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%BF%99%E4%B8%AA%E4%BA%BA&tl=zh-CN&client=tw-ob
+那个人\tnà ge rén\tcette personne-là\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E9%82%A3%E4%B8%AA%E4%BA%BA&tl=zh-CN&client=tw-ob
+都\tdōu\ttous / tout\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E9%83%BD&tl=zh-CN&client=tw-ob
+朋友\tpéngyǒu\tami\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%9C%8B%E5%8F%8B&tl=zh-CN&client=tw-ob
+男朋友\tnán péngyǒu\tpetit ami\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%94%B7%E6%9C%8B%E5%8F%8B&tl=zh-CN&client=tw-ob
+女朋友\tnǚ péngyǒu\tpetite amie\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A5%B3%E6%9C%8B%E5%8F%8B&tl=zh-CN&client=tw-ob
+姐姐\tjiějie\tgrande sœur\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A7%90%E5%A7%90&tl=zh-CN&client=tw-ob
+妹妹\tmèimei\tpetite sœur\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A6%B9%E5%A6%B9&tl=zh-CN&client=tw-ob
+哥哥\tgēge\tgrand frère\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%93%A5%E5%93%A5&tl=zh-CN&client=tw-ob
+弟弟\tdìdi\tpetit frère\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%BC%9F%E5%BC%9F&tl=zh-CN&client=tw-ob
+爸爸\tbàba\tpapa\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%88%B8%E7%88%B8&tl=zh-CN&client=tw-ob
+妈妈\tmāma\tmaman\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A6%88%E5%A6%88&tl=zh-CN&client=tw-ob
+孩子\tháizi\tenfant\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%AD%A9%E5%AD%90&tl=zh-CN&client=tw-ob
+父母\tfùmǔ\tparents\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%88%B6%E6%AF%8D&tl=zh-CN&client=tw-ob
+学生\txuéshēng\tétudiant\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%AD%A6%E7%94%9F&tl=zh-CN&client=tw-ob
+大学生\tdàxuéshēng\tétudiant (supérieur)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A4%A7%E5%AD%A6%E7%94%9F&tl=zh-CN&client=tw-ob
+中学生\tzhōngxuéshēng\télève du secondaire\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%AD%E5%AD%A6%E7%94%9F&tl=zh-CN&client=tw-ob
+小学生\txiǎoxuéshēng\télève du primaire\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%B0%8F%E5%AD%A6%E7%94%9F&tl=zh-CN&client=tw-ob
+博士\tbóshì\tdocteur (titre académique)\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8D%9A%E5%A3%AB&tl=zh-CN&client=tw-ob
+汉语\thànyǔ\tlangue chinoise\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%B1%89%E8%AF%AD&tl=zh-CN&client=tw-ob
+日语\trìyǔ\tlangue japonaise\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%97%A5%E8%AF%AD&tl=zh-CN&client=tw-ob
+法语\tfǎyǔ\tlangue française\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%B3%95%E8%AF%AD&tl=zh-CN&client=tw-ob
+英语\tyīngyǔ\tlangue anglaise\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%8B%B1%E8%AF%AD&tl=zh-CN&client=tw-ob
+德语\tdéyǔ\tlangue allemande\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%BE%B7%E8%AF%AD&tl=zh-CN&client=tw-ob
+文\twén\técriture / langue\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%96%87&tl=zh-CN&client=tw-ob
+历史\tlìshǐ\thistoire\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8E%86%E5%8F%B2&tl=zh-CN&client=tw-ob
+艺术\tyìshù\tart\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%89%BA%E6%9C%AF&tl=zh-CN&client=tw-ob
+文学\twénxué\tlittérature\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%96%87%E5%AD%A6&tl=zh-CN&client=tw-ob
+数学\tshùxué\tmathématiques\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%95%B0%E5%AD%A6&tl=zh-CN&client=tw-ob
+中国\tzhōngguó\tChine\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%AD%E5%9B%BD&tl=zh-CN&client=tw-ob
+北京\tběijīng\tPékin\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8C%97%E4%BA%AC&tl=zh-CN&client=tw-ob
+法国\tfǎguó\tFrance\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%B3%95%E5%9B%BD&tl=zh-CN&client=tw-ob
+车\tchē\tvéhicule\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%BD%A6&tl=zh-CN&client=tw-ob
+汽车\tqìchē\tvoiture\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%B1%BD%E8%BD%A6&tl=zh-CN&client=tw-ob
+自行车\tzìxíngchē\tvélo\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%87%AA%E8%A1%8C%E8%BD%A6&tl=zh-CN&client=tw-ob
+国\tguó\tpays\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%9B%BD&tl=zh-CN&client=tw-ob
+人口\trénkǒu\tpopulation\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%BA%BA%E5%8F%A3&tl=zh-CN&client=tw-ob
+北方人\tběifāngrén\tgens du nord\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8C%97%E6%96%B9%E4%BA%BA&tl=zh-CN&client=tw-ob
+南方人\tnánfāngrén\tgens du sud\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8D%97%E6%96%B9%E4%BA%BA&tl=zh-CN&client=tw-ob
+中\tzhōng\tau centre / milieu\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%AD&tl=zh-CN&client=tw-ob
+北\tběi\tnord\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8C%97&tl=zh-CN&client=tw-ob
+南\tnán\tsud\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%8D%97&tl=zh-CN&client=tw-ob
+东\tdōng\test\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%9C&tl=zh-CN&client=tw-ob
+西\txī\touest\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%A5%BF&tl=zh-CN&client=tw-ob
+茶\tchá\tthé\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E8%8C%B6&tl=zh-CN&client=tw-ob
+是\tshì\tOui\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E6%98%AF&tl=zh-CN&client=tw-ob
+不\tbù\tnon\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E4%B8%8D&tl=zh-CN&client=tw-ob
+红\thóng\trouge\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E7%BA%A2&tl=zh-CN&client=tw-ob
+奶\tnâi\tlait\thttps://translate.google.com/translate_tts?ie=UTF-8&q=%E5%A5%B6&tl=zh-CN&client=tw-ob`;
+
+  // ===== Parse TSV -> deck =====
+  function parseTSV(tsv){
+    const lines = (tsv||"").replace(/\r\n?/g,"\n").split("\n");
+    const arr = [];
+    for(const raw of lines){
+      const line = raw.trim();
+      if(!line || line.startsWith("#")) continue;
+      // split by tabs; fallback to 2+ spaces
+      const cols = line.split(/\t+/);
+      if(cols.length < 3) continue;
+      const [hanzi, pinyin, meaning, audio] = cols;
+      if(!hanzi) continue;
+      arr.push({hanzi:hanzi.trim(), pinyin:(pinyin||"").trim(), meaning:(meaning||"").trim(), audio:(audio||"").trim()});
+    }
+    return arr;
+  }
+
+  // ===== Spaced repetition (ultra simple) =====
+  const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
+  const LS_KEY = "cn_flash_audio_tsv_v1";
+
+  let state = loadState();
+
+  function loadState(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(raw){
+        const obj = JSON.parse(raw);
+        if(Array.isArray(obj.cards) && obj.cards.length) return obj;
+      }
+    }catch(e){}
+    const rows = parseTSV(DEFAULT_TSV);
+    const cards = rows.map((c,i)=>({
+      id: i+"_"+c.hanzi, ...c, score:0, nextDue:0, seen:0, good:0, again:0
+    }));
+    if(!cards.length){
+      // fallback minimal deck
+      cards.push({id:"0_我", hanzi:"我", pinyin:"wǒ", meaning:"je / moi", audio:"", score:0,nextDue:0,seen:0,good:0,again:0});
+    }
+    shuffle(cards);
+    const st = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
+    save(st); return st;
+  }
+  function save(o=state){ localStorage.setItem(LS_KEY, JSON.stringify(o)); }
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+  function now(){ return Date.now(); }
+  function current(){ return state.cards.find(c=>c.id===state.currentId)||state.cards[0]; }
+
+  function pickNext(){
+    const due = state.cards.filter(c=>c.nextDue<=now());
+    let next = null;
+    if(due.length){
+      due.sort((a,b)=>a.score-b.score || a.seen-b.seen);
+      next = due[0];
+    }else{
+      next = state.cards.slice().sort((a,b)=>a.nextDue-b.nextDue)[0];
+    }
+    state.currentId = next.id; state.flipped = false; save(); render();
+  }
+
+  // ===== UI =====
+  const face = document.getElementById('face');
+  const hanziEl = document.getElementById('hanzi');
+  const pinyinEl = document.getElementById('pinyin');
+  const meaningEl = document.getElementById('meaning');
+  const audioInfo = document.getElementById('audioInfo');
+  const statsEl = document.getElementById('stats');
+  const btnFlip = document.getElementById('btnFlip');
+  const btnAgain = document.getElementById('btnAgain');
+  const btnGood = document.getElementById('btnGood');
+  const btnSound = document.getElementById('btnSound');
+  const btnImport = document.getElementById('btnImport');
+  const resetBtn = document.getElementById('reset');
+  const exportBtn = document.getElementById('exportJson');
+  const cardArea = document.getElementById('cardArea');
+  const dlg = document.getElementById('dlg');
+  const tsvTA = document.getElementById('tsv');
+  const cancelDlgBtn = document.getElementById('cancelDlg');
+  const saveTsvBtn = document.getElementById('saveTsv');
+
+  let audio = new Audio();
+  audio.preload = "none";
+
+  function render(){
+    const c = current();
+    hanziEl.textContent = c.hanzi || "";
+    pinyinEl.textContent = c.pinyin || "";
+    meaningEl.textContent = c.meaning || "";
+    audioInfo.style.display = c.audio ? "" : "none";
+    face.classList.toggle('flipped', state.flipped);
+    const dueCount = state.cards.filter(x=>x.nextDue<=now()).length;
+    const mastered = state.cards.filter(x=>x.score>=INTERVALS.length-1).length;
+    statsEl.textContent = `${dueCount} dûes · ${mastered} maîtrisées`;
+  }
+
+  function flip(){ state.flipped = !state.flipped; save(); render(); }
+  function answerGood(){
+    const c = current(); c.seen++; c.good++;
+    c.score = Math.min(c.score+1, INTERVALS.length-1);
+    c.nextDue = now() + INTERVALS[c.score];
+    save(); pickNext();
+  }
+  function answerAgain(){
+    const c = current(); c.seen++; c.again++;
+    c.score = Math.max(0, c.score-1);
+    c.nextDue = now() + 30e3; // revoit vite
+    save(); pickNext();
+  }
+  async function playAudio(){
+    const c = current();
+    if(!c.audio) return;
+    try{
+      // iOS/Android need a user gesture; here it's button-triggered.
+      if(audio.src !== c.audio){ audio.src = c.audio; }
+      await audio.play();
+    }catch(err){
+      alert("Impossible de lire l'audio (peut être bloqué par le site). Essaie d'ouvrir le fichier via HTTPS sur un domaine (OVH/Drive), ou vérifie l'URL.");
+    }
+  }
+
+  // Gestes & boutons
+  btnFlip.addEventListener('click', flip);
+  btnGood.addEventListener('click', answerGood);
+  btnAgain.addEventListener('click', answerAgain);
+  btnSound.addEventListener('click', playAudio);
+  face.addEventListener('click', flip);
+  // Double-tap sur la carte -> jouer l'audio
+  let lastTap = 0;
+  face.addEventListener('touchend', (e)=>{
+    const t = Date.now();
+    if(t - lastTap < 300){ playAudio(); }
+    lastTap = t;
+  }, {passive:true});
+
+  let startX=null,startY=null;
+  cardArea.addEventListener('touchstart', e=>{
+    const t=e.changedTouches[0]; startX=t.clientX; startY=t.clientY;
+  },{passive:true});
+  cardArea.addEventListener('touchend', e=>{
+    const t=e.changedTouches[0]; if(startX===null) return;
+    const dx=t.clientX-startX, dy=t.clientY-startY;
+    if(Math.abs(dx)>40 && Math.abs(dx)>Math.abs(dy)){ dx>0?answerGood():answerAgain(); }
+    else{ flip(); }
+    startX=startY=null;
+  },{passive:true});
+
+  window.addEventListener('keydown', e=>{
+    if(e.key===' '){e.preventDefault();flip();}
+    if(e.key==='ArrowRight'){e.preventDefault();answerGood();}
+    if(e.key==='ArrowLeft'){e.preventDefault();answerAgain();}
+    if(e.key==='Enter'){e.preventDefault();playAudio();}
+  });
+
+  // Import / Export / Reset
+  btnImport.addEventListener('click', ()=>{
+    // Pré-remplir avec l'export actuel pour servir de modèle
+    const tsv = state.cards.map(({hanzi,pinyin,meaning,audio})=>[hanzi,pinyin,meaning,audio||""].join("\t")).join("\n");
+    tsvTA.value = tsv || DEFAULT_TSV;
+    dlg.showModal();
+  });
+  cancelDlgBtn.addEventListener('click', ()=> dlg.close());
+  saveTsvBtn.addEventListener('click', ()=>{
+    try{
+      const rows = parseTSV(tsvTA.value);
+      if(!rows.length) throw new Error("TSV vide");
+      const cards = rows.map((c,i)=>({
+        id: i+"_"+(c.hanzi||("id"+i)), ...c, score:0, nextDue:0, seen:0, good:0, again:0
+      }));
+      shuffle(cards);
+      state = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
+      save();
+      dlg.close();
+      render();
+    }catch(e){
+      alert("Impossible d'importer le TSV. Vérifie que chaque ligne contient au moins 3 colonnes séparées par TAB (caractère\\tpinyin\\ttraduction[\\taudio]).");
+    }
+  });
+
+  resetBtn.addEventListener('click', ()=>{
+    if(confirm("Remise à zéro (progrès + deck) ?")){
+      localStorage.removeItem(LS_KEY);
+      state = loadState();
+      render();
+    }
+  });
+  exportBtn.addEventListener('click', ()=>{
+    const data = {
+      deck: state.cards.map(({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again})=>({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again})),
+      exportedAt: new Date().toISOString()
+    };
+    const blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'flashcards-cn-audio.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  // Boot
+  pickNext();
+})();
+</script>
+</body>
+</html>
