@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Hanzi Flash — Clean Mobile</title>
+  <title>Hanzi Flash — Clean Mobile + Corner Stats</title>
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.webmanifest">
@@ -40,7 +40,6 @@
     .pinyin{font-size:6vw;opacity:.9}
     .meaning{font-size:5vw;color:var(--muted)}
     @media (min-width:600px){.pinyin{font-size:28px}.meaning{font-size:22px}}
-    .hint{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:var(--muted);font-size:12px}
     .pill{font-size:11px;color:#cbd1d8;background:#0c0e15;border:1px solid #2a2a33;border-radius:999px;padding:6px 10px}
 
     /* Controls (desktop) */
@@ -57,19 +56,44 @@
     dialog{border:none;border-radius:14px;background:#11131a;color:var(--fg);max-width:680px;width:92vw;padding:0}
     dialog::backdrop{background:rgba(0,0,0,.6)}
     .sheet{padding:16px;display:flex;flex-direction:column;gap:12px}
+    textarea{width:100%;min-height:40vh;border-radius:10px;background:#0c0e15;color:var(--fg);border:1px solid #2a2a33;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+    .row{display:flex;gap:10px;justify-content:flex-end}
+    .small{font-size:12px;color:var(--muted)}
 
     /* ---- Mobile épuré : uniquement la carte visible ---- */
     @media (max-width:640px){
-      header, .controls, .deck-tools, .hint { display:none !important; }
+      header, .controls, .deck-tools { display:none !important; }
       .wrap{ padding-top: env(safe-area-inset-top); }
       .face{ max-height: 78vh; }
     }
 
-    /* ---- Drag/Swipe animation ---- */
+    /* ---- Drag/Swipe animation (horizontale uniquement) ---- */
+    .face.dragging{ transition:none; will-change: transform, box-shadow; }
+    .face.drag-right{ box-shadow:0 20px 40px rgba(46,204,113,.25); }
+    .face.drag-left { box-shadow:0 20px 40px rgba(255,92,92,.25); }
+
     @keyframes swipeRight { to { transform: translateX(120%) rotate(12deg); opacity:.0; } }
     @keyframes swipeLeft  { to { transform: translateX(-120%) rotate(-12deg); opacity:.0; } }
     .swipe-right { animation: swipeRight .25s ease-out forwards; }
     .swipe-left  { animation: swipeLeft  .25s ease-out forwards; }
+
+    /* ---- Stats popover bas-gauche ---- */
+    #statsPopover{
+      position: fixed; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
+      width: min(460px, 92vw); max-height: 55vh; overflow:auto;
+      background:#0f1118; border:1px solid #1e2230; border-radius:14px;
+      padding:12px 12px 14px; display:none; z-index: 20;
+      box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    }
+    #statsPopover h3{ margin:0 0 8px; font-size:15px; color:#cdd3da; }
+    #statsPopover .meta{ font-size:12px; color:#9aa0a6; margin-bottom:8px; }
+    #statsTable{ width:100%; border-collapse:collapse; font-size:14px; }
+    #statsTable th, #statsTable td{ padding:8px 6px; border-bottom:1px solid #1e2230; }
+    #statsTable th{ text-align:left; color:#9aa0a6; font-weight:600; }
+    .badge{ display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; }
+    .b-good{ background:rgba(46,204,113,.15); color:var(--good); border:1px solid rgba(46,204,113,.3); }
+    .b-learn{ background:rgba(255,92,92,.15); color:var(--bad); border:1px solid rgba(255,92,92,.3); }
+    #closeStatsBtn{ margin-top:10px; font-size:12px; color:var(--accent); background:none; border:none; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -83,7 +107,6 @@
       <div class="face" id="face">
         <div class="front">
           <div class="hanzi" id="hanzi">我</div>
-          <div class="hint">tap = retourner • appui long = 🔊 • swipe ←/→</div>
         </div>
         <div class="back">
           <div class="pinyin" id="pinyin">wǒ</div>
@@ -93,7 +116,7 @@
       </div>
     </div>
 
-    <!-- Contrôles desktop -->
+    <!-- Contrôles desktop (cachés sur mobile) -->
     <div class="controls">
       <button class="btn again" id="btnAgain">Encore</button>
       <button class="btn flip" id="btnFlip">Retourner</button>
@@ -101,79 +124,312 @@
       <button class="btn sound" id="btnSound">🔊 Écouter</button>
       <button class="btn tool" id="btnImport">Importer TSV</button>
     </div>
+
     <div class="deck-tools">
       <button class="link" id="reset">Remise à zéro</button>
       <button class="link" id="exportJson">Exporter (JSON)</button>
     </div>
   </div>
 
+  <!-- Stats popover -->
+  <div id="statsPopover">
+    <h3>Stats du deck</h3>
+    <div class="meta" id="statsMeta">–</div>
+    <div style="overflow:auto; max-height:45vh;">
+      <table id="statsTable">
+        <thead>
+          <tr><th>Hanzi</th><th>Pinyin</th><th>Statut</th><th>Vues</th></tr>
+        </thead>
+        <tbody id="statsBody"></tbody>
+      </table>
+    </div>
+    <button id="closeStatsBtn">Fermer</button>
+  </div>
+
   <!-- Import TSV -->
   <dialog id="dlg">
     <div class="sheet">
-      <strong>Importer un deck depuis TSV</strong>
+      <strong>Importer un deck depuis TSV (Excel/Google Sheets)</strong>
+      <div class="small">Colonnes : caractère — pinyin — traduction — (optionnel) URL mp3. Si vide, l’app cherche <code>./audios/&lt;HANZI&gt;.mp3</code>.</div>
       <textarea id="tsv"></textarea>
-      <div><button onclick="dlg.close()">Fermer</button></div>
-    </div>
-  </dialog>
-
-  <!-- Stats dialog -->
-  <dialog id="statsDlg">
-    <div class="sheet">
-      <h3>Stats</h3>
-      <div id="statsTable"></div>
-      <div><button onclick="statsDlg.close()">Fermer</button></div>
+      <div class="row">
+        <button class="link" id="cancelDlg">Annuler</button>
+        <button class="link" id="saveTsv">Importer</button>
+      </div>
     </div>
   </dialog>
 
 <script>
 (function(){
-  const INTERVALS=[0,60000,600000,3600000,86400000];
-  const LS_KEY="cn_flash";
-  let state=loadState();
+  // ====== CONFIG ======
+  const AUDIO_DIR = "./audios";
+  const DEFAULT_TSV = `我\twǒ\tje / moi\n你\tnǐ\ttu / toi\n今天\tjīntiān\taujourd'hui`;
+  function guessAudioURL(h){ return `${AUDIO_DIR}/${encodeURIComponent(String(h).trim())}.mp3`; }
+
+  // ====== TSV ======
+  function parseTSV(tsv){
+    const lines = (tsv||"").replace(/\r\n?/g,"\n").split("\n");
+    const arr = [];
+    for(const raw of lines){
+      const line = raw.trim(); if(!line || line.startsWith("#")) continue;
+      const cols = line.split(/\t+/); if(cols.length<3) continue;
+      const [hanzi,pinyin,meaning,audio] = cols;
+      arr.push({hanzi:hanzi.trim(),pinyin:(pinyin||"").trim(),meaning:(meaning||"").trim(),audio:(audio||"").trim()});
+    }
+    return arr;
+  }
+
+  // ====== SRS ======
+  const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
+  const LS_KEY = "cn_flash_audio_tsv_v5";
+
+  let state = loadState();
   function loadState(){
-    return {cards:[{hanzi:"我",pinyin:"wǒ",meaning:"je / moi",score:0,nextDue:0}],currentId:"0",flipped:false};
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(raw){ const obj=JSON.parse(raw); if(Array.isArray(obj.cards)&&obj.cards.length) return obj; }
+    }catch(e){}
+    const rows = parseTSV(DEFAULT_TSV);
+    const cards = rows.map((c,i)=>({id:i+"_"+c.hanzi, ...c, score:0,nextDue:0,seen:0,good:0,again:0}));
+    if(!cards.length){ cards.push({id:"0_我",hanzi:"我",pinyin:"wǒ",meaning:"je / moi",audio:"",score:0,nextDue:0,seen:0,good:0,again:0}); }
+    shuffle(cards);
+    const st = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
+    save(st); return st;
   }
-  function current(){return state.cards[0];}
+  function save(o=state){ localStorage.setItem(LS_KEY, JSON.stringify(o)); }
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+  function now(){ return Date.now(); }
+  function current(){ return state.cards.find(c=>c.id===state.currentId)||state.cards[0]; }
+
+  function pickNext(){
+    const due = state.cards.filter(c=>c.nextDue<=now());
+    let next = null;
+    if(due.length){ due.sort((a,b)=>a.score-b.score || a.seen-b.seen); next = due[0]; }
+    else{ next = state.cards.slice().sort((a,b)=>a.nextDue-b.nextDue)[0]; }
+    state.currentId = next.id; state.flipped = false; save(); render();
+  }
+
+  // ====== UI refs ======
+  const face = document.getElementById('face');
+  const hanziEl = document.getElementById('hanzi');
+  const pinyinEl = document.getElementById('pinyin');
+  const meaningEl = document.getElementById('meaning');
+  const statsEl = document.getElementById('stats');
+  const btnFlip = document.getElementById('btnFlip');
+  const btnAgain = document.getElementById('btnAgain');
+  const btnGood = document.getElementById('btnGood');
+  const btnSound = document.getElementById('btnSound');
+  const btnImport = document.getElementById('btnImport');
+  const resetBtn = document.getElementById('reset');
+  const exportBtn = document.getElementById('exportJson');
+  const cardArea = document.getElementById('cardArea');
+  const dlg = document.getElementById('dlg');
+  const tsvTA = document.getElementById('tsv');
+  const cancelDlgBtn = document.getElementById('cancelDlg');
+  const saveTsvBtn = document.getElementById('saveTsv');
+
+  // Stats popover
+  const statsPopover = document.getElementById('statsPopover');
+  const statsMeta = document.getElementById('statsMeta');
+  const statsBody = document.getElementById('statsBody');
+  const closeStatsBtn = document.getElementById('closeStatsBtn');
+
+  // ====== Audio + fallback ======
+  const player = new Audio(); player.preload="none";
+  async function playAudio(){
+    const c = current(); if(!c) return;
+    const url = (c.audio && c.audio.trim()) ? c.audio.trim() : guessAudioURL(c.hanzi);
+    try{
+      if(player.src !== url) player.src = url;
+      await player.play(); return;
+    }catch(e){ console.warn("Audio KO, fallback synthèse", e); }
+    if('speechSynthesis' in window){
+      const u = new SpeechSynthesisUtterance((c.hanzi||c.pinyin||"")+"");
+      const voices = speechSynthesis.getVoices();
+      const zh = voices.find(v => /zh-|chinese|han/i.test((v.lang||"")+(v.name||"")));
+      if(zh) u.voice = zh; u.rate = .9; speechSynthesis.cancel(); speechSynthesis.speak(u);
+    }
+  }
+
+  // ====== Render ======
   function render(){
-    const c=current();
-    hanziEl.textContent=c.hanzi;pinyinEl.textContent=c.pinyin;meaningEl.textContent=c.meaning;
-    face.classList.toggle("flipped",state.flipped);
+    const c = current();
+    hanziEl.textContent = c.hanzi||"";
+    pinyinEl.textContent = c.pinyin||"";
+    meaningEl.textContent = c.meaning||"";
+    face.classList.toggle('flipped', state.flipped);
+    const dueCount = state.cards.filter(x=>x.nextDue<=now()).length;
+    const mastered = masteredCount();
+    statsEl.textContent = `${dueCount} dûes · ${mastered} maîtrisées`;
+    resetFaceTransform(); // sécurité: toujours recentrer visuellement
   }
-  const face=document.getElementById("face");
-  const hanziEl=document.getElementById("hanzi");
-  const pinyinEl=document.getElementById("pinyin");
-  const meaningEl=document.getElementById("meaning");
-  const statsDlg=document.getElementById("statsDlg");
-  const statsTable=document.getElementById("statsTable");
 
-  function flip(){state.flipped=!state.flipped;render();}
-  function answer(good){render();}
-  function openStats(){statsTable.textContent="Cartes : "+state.cards.length;statsDlg.showModal();}
+  function masteredCount(){
+    const maxIdx = INTERVALS.length - 1;
+    return state.cards.filter(c=>c.score>=maxIdx).length;
+  }
 
-  face.addEventListener("click",flip);
+  function flip(){ state.flipped=!state.flipped; save(); render(); }
 
-  let startX=null,startY=null,longPressTimer=null,longPressFired=false;
-  cardArea.addEventListener("touchstart",e=>{
-    const t=e.changedTouches[0];startX=t.clientX;startY=t.clientY;longPressFired=false;
-    longPressTimer=setTimeout(()=>{
-      longPressFired=true;
-      if(startX<window.innerWidth/2 && startY>window.innerHeight*0.7) openStats();
-      else console.log("🔊 jouer audio ici");
-    },500);
+  function answer(good){
+    const c = current();
+    c.seen++;
+    if(good){ c.good++; c.score = Math.min(c.score+1, INTERVALS.length-1); c.nextDue = now()+INTERVALS[c.score]; }
+    else    { c.again++; c.score = Math.max(0, c.score-1); c.nextDue = now()+30e3; }
+    save();
+    pickNext();
+  }
+
+  // ---- Desktop buttons (cachés sur mobile) ----
+  btnFlip?.addEventListener('click', ()=>flip());
+  btnGood?.addEventListener('click', ()=>answer(true));
+  btnAgain?.addEventListener('click', ()=>answer(false));
+  btnSound?.addEventListener('click', ()=>playAudio());
+  btnImport?.addEventListener('click', ()=>{
+    const tsv = state.cards.map(({hanzi,pinyin,meaning,audio})=>[hanzi,pinyin,meaning,audio||""].join("\t")).join("\n");
+    tsvTA.value = tsv || DEFAULT_TSV; dlg.showModal();
   });
-  cardArea.addEventListener("touchmove",e=>{
-    const t=e.changedTouches[0];if(Math.abs(t.clientX-startX)>10||Math.abs(t.clientY-startY)>10)clearTimeout(longPressTimer);
+  cancelDlgBtn?.addEventListener('click', ()=> dlg.close());
+  saveTsvBtn?.addEventListener('click', ()=>{
+    try{
+      const rows = parseTSV(tsvTA.value); if(!rows.length) throw new Error();
+      const cards = rows.map((c,i)=>({id:i+"_"+(c.hanzi||("id"+i)), ...c, score:0,nextDue:0,seen:0,good:0,again:0}));
+      shuffle(cards);
+      state = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
+      save(); dlg.close(); render();
+    }catch(e){ alert("Format: caractère\\tpinyin\\ttraduction[\\taudio]"); }
   });
-  cardArea.addEventListener("touchend",e=>{
-    clearTimeout(longPressTimer);
-    const dx=e.changedTouches[0].clientX-startX,dy=e.changedTouches[0].clientY-startY;
-    if(Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)){
-      const cls=dx>0?"swipe-right":"swipe-left";face.classList.add(cls);
-      face.addEventListener("animationend",()=>{face.classList.remove(cls);answer(dx>0);},{once:true});
+  resetBtn?.addEventListener('click', ()=>{
+    if(confirm("Remise à zéro ?")){
+      localStorage.removeItem(LS_KEY); state = loadState(); render();
     }
   });
+  exportBtn?.addEventListener('click', ()=>{
+    const data = {
+      deck: state.cards.map(({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again})=>({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again})),
+      exportedAt: new Date().toISOString()
+    };
+    const blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='flashcards-cn-audio.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  });
 
-  render();
+  // ===== Helpers reset transform =====
+  function resetFaceTransform(){
+    face.classList.remove('dragging','drag-right','drag-left','swipe-right','swipe-left');
+    face.style.transform = ''; // re-centre visuellement
+  }
+
+  // ---- Interactions mobile : tap / appui long (audio ou stats coin bas-gauche) / swipe ←/→ ----
+  face.addEventListener('click', ()=>{ if(!longPressFired) flip(); longPressFired=false; });
+
+  let startX=null,startY=null, longPressTimer=null, longPressFired=false, longPressMode=null;
+
+  function inBottomLeftCorner(x,y){
+    const r = face.getBoundingClientRect();
+    const withinLeft = (x - r.left) <= r.width * 0.35;       // 35% largeur gauche
+    const withinBottom = (r.bottom - y) <= r.height * 0.35;   // 35% hauteur bas
+    return withinLeft && withinBottom;
+  }
+
+  cardArea.addEventListener('touchstart', (e)=>{
+    const t = e.changedTouches[0]; startX=t.clientX; startY=t.clientY;
+    face.classList.add('dragging');
+    longPressFired=false;
+    // Détermine si l'appui long vise les stats ou l'audio
+    longPressMode = inBottomLeftCorner(startX, startY) ? 'stats' : 'audio';
+    longPressTimer = setTimeout(()=>{
+      longPressFired = true;
+      if(longPressMode==='stats'){ openStatsPopover(); }
+      else{ playAudio(); }
+    }, 500);
+  }, {passive:true});
+
+  cardArea.addEventListener('touchmove', (e)=>{
+    if(startX===null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX, dy = t.clientY - startY;
+
+    // dès qu'on bouge, on annule l'appui long
+    if(Math.abs(dx)>10 || Math.abs(dy)>10){ clearTimeout(longPressTimer); }
+
+    // n'appliquer l'effet de drag QUE si geste majoritairement horizontal
+    if(Math.abs(dx) > Math.abs(dy)){
+      const rot = dx/20;
+      face.style.transform = `translateX(${dx}px) rotate(${rot}deg) ${state.flipped?'rotateY(180deg)':''}`;
+      face.classList.toggle('drag-right', dx>0);
+      face.classList.toggle('drag-left', dx<0);
+    } else {
+      // pas d'animation horizontale → éviter halo rouge/vert parasite
+      face.classList.remove('drag-right','drag-left');
+      face.style.transform = `${state.flipped?'rotateY(180deg)':''}`;
+    }
+  }, {passive:true});
+
+  cardArea.addEventListener('touchend', (e)=>{
+    clearTimeout(longPressTimer);
+    if(startX===null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX, dy = t.clientY - startY;
+    const absX = Math.abs(dx), absY = Math.abs(dy);
+    const THX = 60; // seuil horizontal
+
+    // On retire visuels de drag
+    face.classList.remove('dragging','drag-right','drag-left');
+
+    // Swipe horizontal seulement
+    if(absX > absY && absX > THX){
+      const cls = dx>0 ? 'swipe-right' : 'swipe-left';
+      const good = dx>0;
+
+      // 1) anime
+      face.classList.add(cls);
+
+      // 2) à la fin de l'anim: reset visuel, puis answer() (charge la suivante centrée)
+      const onAnimEnd = ()=>{
+        face.removeEventListener('animationend', onAnimEnd);
+        resetFaceTransform();     // ← re-centre AVANT de passer à la suivante
+        answer(good);
+      };
+      face.addEventListener('animationend', onAnimEnd);
+    } else {
+      // petit mouvement → juste reset
+      resetFaceTransform();
+    }
+
+    startX=startY=null;
+  }, {passive:true});
+
+  // ====== Stats popover ======
+  function openStatsPopover(){
+    buildStatsTable();
+    statsPopover.style.display = 'block';
+  }
+  function closeStatsPopover(){
+    statsPopover.style.display = 'none';
+  }
+  closeStatsBtn.addEventListener('click', closeStatsPopover);
+
+  function buildStatsTable(){
+    const maxIdx = INTERVALS.length - 1;
+    const mastered = state.cards.filter(c=>c.score>=maxIdx).sort((a,b)=>a.hanzi.localeCompare(b.hanzi));
+    const learning = state.cards.filter(c=>c.score<maxIdx).sort((a,b)=>a.hanzi.localeCompare(b.hanzi));
+    statsMeta.textContent = `${mastered.length} maîtrisées · ${learning.length} en cours · ${state.cards.length} cartes`;
+
+    const rows = [];
+    for(const c of mastered){
+      rows.push(`<tr><td>${escapeHTML(c.hanzi)}</td><td>${escapeHTML(c.pinyin||"")}</td><td><span class="badge b-good">Maîtrisée</span></td><td>${c.seen}</td></tr>`);
+    }
+    for(const c of learning){
+      rows.push(`<tr><td>${escapeHTML(c.hanzi)}</td><td>${escapeHTML(c.pinyin||"")}</td><td><span class="badge b-learn">À revoir</span></td><td>${c.seen}</td></tr>`);
+    }
+    statsBody.innerHTML = rows.join("");
+  }
+
+  function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
+
+  // Boot
+  pickNext();
 })();
 </script>
 </body>
