@@ -17,7 +17,7 @@
   <style>
     :root{--bg:#0b0b0f;--fg:#f3f3f5;--muted:#9aa0a6;--accent:#4f8cff;--good:#2ecc71;--bad:#ff5c5c;--card:#15151b;--card2:#1d1d26}
     *{box-sizing:border-box}
-    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    html,body{height:100%;margin:0;overflow: hidden;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
     .wrap{max-width:680px;margin:0 auto;padding:env(safe-area-inset-top) 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;height:100%}
     header{display:flex;align-items:center;justify-content:space-between;padding:8px 0;gap:8px}
     h1{font-size:16px;margin:0;color:var(--muted)}
@@ -50,6 +50,17 @@
     .row{display:flex;gap:10px;justify-content:flex-end}
     .small{font-size:12px;color:var(--muted)}
     .pill{font-size:11px;color:#cbd1d8;background:#0c0e15;border:1px solid #2a2a33;border-radius:999px;padding:6px 10px}
+    /* Cacher sur mobile, visible par défaut sur desktop */
+    @media (max-width: 640px) {
+      .desktop-only { display: none !important; }
+      .controls { gap: 10px; } /* déjà présent, garde-le */
+      .btn.sound {
+        flex-basis: 100%;     /* prend toute la ligne -> passe à la 2e ligne */
+        max-width: 220px;     /* largeur agréable */
+        margin: 6px auto 0;   /* centre horizontalement */
+        display: block;       /* pour que margin auto centre bien */
+      }
+    }
   </style>
 </head>
 <body>
@@ -78,12 +89,12 @@
       <button class="btn flip" id="btnFlip">Retourner</button>
       <button class="btn good" id="btnGood">OK</button>
       <button class="btn sound" id="btnSound">🔊 Écouter</button>
-      <button class="btn tool" id="btnImport">Importer TSV</button>
+      <button class="btn tool desktop-only" id="btnImport">Importer TSV</button>
     </div>
 
     <div class="deck-tools">
-      <button class="link" id="reset">Remise à zéro</button>
-      <button class="link" id="exportJson">Exporter (JSON)</button>
+      <button class="link desktop-only" id="reset">Remise à zéro</button>
+      <button class="link desktop-only" id="exportJson">Exporter (JSON)</button>
     </div>
   </div>
 
