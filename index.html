@@ -40,9 +40,10 @@
     .pinyin{font-size:6vw;opacity:.9}
     .meaning{font-size:5vw;color:var(--muted)}
     @media (min-width:600px){.pinyin{font-size:28px}.meaning{font-size:22px}}
+    .hint{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:var(--muted);font-size:12px}
     .pill{font-size:11px;color:#cbd1d8;background:#0c0e15;border:1px solid #2a2a33;border-radius:999px;padding:6px 10px}
 
-    /* Controls desktop */
+    /* Controls (desktop) */
     .controls{display:flex;gap:10px;flex-wrap:wrap}
     .btn{flex:1;border:none;border-radius:14px;padding:14px 16px;font-size:16px;font-weight:600;cursor:pointer}
     .again{background:rgba(255,92,92,.12);color:var(--bad);border:1px solid rgba(255,92,92,.3)}
@@ -56,24 +57,17 @@
     dialog{border:none;border-radius:14px;background:#11131a;color:var(--fg);max-width:680px;width:92vw;padding:0}
     dialog::backdrop{background:rgba(0,0,0,.6)}
     .sheet{padding:16px;display:flex;flex-direction:column;gap:12px}
-    textarea{width:100%;min-height:40vh;border-radius:10px;background:#0c0e15;color:var(--fg);border:1px solid #2a2a33;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
-    .row{display:flex;gap:10px;justify-content:flex-end}
-    .small{font-size:12px;color:var(--muted)}
 
-    /* Mobile épuré */
+    /* ---- Mobile épuré : uniquement la carte visible ---- */
     @media (max-width:640px){
-      header, .controls, .deck-tools{ display:none !important; }
+      header, .controls, .deck-tools, .hint { display:none !important; }
       .wrap{ padding-top: env(safe-area-inset-top); }
       .face{ max-height: 78vh; }
     }
 
-    /* Anim swipe */
-    @keyframes swipeRight {
-      to { transform: translateX(120%) rotate(12deg); opacity:.0; }
-    }
-    @keyframes swipeLeft {
-      to { transform: translateX(-120%) rotate(-12deg); opacity:.0; }
-    }
+    /* ---- Drag/Swipe animation ---- */
+    @keyframes swipeRight { to { transform: translateX(120%) rotate(12deg); opacity:.0; } }
+    @keyframes swipeLeft  { to { transform: translateX(-120%) rotate(-12deg); opacity:.0; } }
     .swipe-right { animation: swipeRight .25s ease-out forwards; }
     .swipe-left  { animation: swipeLeft  .25s ease-out forwards; }
   </style>
@@ -82,13 +76,14 @@
   <div class="wrap">
     <header>
       <h1>Hanzi — Audio Flashcards</h1>
-      <div class="stats" id="stats">0 dues · 0 maîtrisées</div>
+      <div class="stats" id="stats">0 dûes · 0 maîtrisées</div>
     </header>
 
     <div class="card" id="cardArea">
       <div class="face" id="face">
         <div class="front">
           <div class="hanzi" id="hanzi">我</div>
+          <div class="hint">tap = retourner • appui long = 🔊 • swipe ←/→</div>
         </div>
         <div class="back">
           <div class="pinyin" id="pinyin">wǒ</div>
@@ -98,7 +93,7 @@
       </div>
     </div>
 
-    <!-- Desktop controls -->
+    <!-- Contrôles desktop -->
     <div class="controls">
       <button class="btn again" id="btnAgain">Encore</button>
       <button class="btn flip" id="btnFlip">Retourner</button>
@@ -112,110 +107,73 @@
     </div>
   </div>
 
-  <!-- Import -->
+  <!-- Import TSV -->
   <dialog id="dlg">
     <div class="sheet">
-      <strong>Importer TSV</strong>
-      <div class="small">Colonnes : caractère — pinyin — traduction — (optionnel) URL mp3</div>
+      <strong>Importer un deck depuis TSV</strong>
       <textarea id="tsv"></textarea>
-      <div class="row">
-        <button class="link" id="cancelDlg">Annuler</button>
-        <button class="link" id="saveTsv">Importer</button>
-      </div>
+      <div><button onclick="dlg.close()">Fermer</button></div>
     </div>
   </dialog>
 
-  <!-- Stats -->
+  <!-- Stats dialog -->
   <dialog id="statsDlg">
     <div class="sheet">
       <h3>Stats</h3>
       <div id="statsTable"></div>
-      <div class="row"><button class="link" onclick="document.getElementById('statsDlg').close()">Fermer</button></div>
+      <div><button onclick="statsDlg.close()">Fermer</button></div>
     </div>
   </dialog>
 
 <script>
 (function(){
-  const AUDIO_DIR="./audios";
-  const DEFAULT_TSV="我\twǒ\tje / moi";
-
-  function guessAudioURL(h){ return `${AUDIO_DIR}/${encodeURIComponent(String(h).trim())}.mp3`; }
-  function parseTSV(tsv){ return tsv.split(/\n/).map(l=>l.trim()).filter(Boolean).map(l=>{
-    const [hanzi,pinyin,meaning,audio] = l.split(/\t+/);
-    return {hanzi,pinyin,meaning,audio};
-  }); }
-
-  const INTERVALS=[0,60e3,10*60e3,60*60e3,24*60*60e3];
-  const LS_KEY="cn_flash_v1";
+  const INTERVALS=[0,60000,600000,3600000,86400000];
+  const LS_KEY="cn_flash";
   let state=loadState();
   function loadState(){
-    try{const raw=localStorage.getItem(LS_KEY);if(raw)return JSON.parse(raw);}catch(e){}
-    const rows=parseTSV(DEFAULT_TSV);
-    const cards=rows.map((c,i)=>({id:i+"_"+c.hanzi,...c,score:0,nextDue:0,seen:0,good:0,again:0}));
-    return {cards,currentId:cards[0].id,flipped:false};
+    return {cards:[{hanzi:"我",pinyin:"wǒ",meaning:"je / moi",score:0,nextDue:0}],currentId:"0",flipped:false};
   }
-  function save(){localStorage.setItem(LS_KEY,JSON.stringify(state));}
-  function current(){return state.cards.find(c=>c.id===state.currentId);}
-  function pickNext(){state.currentId=state.cards[0].id;state.flipped=false;save();render();}
-
+  function current(){return state.cards[0];}
+  function render(){
+    const c=current();
+    hanziEl.textContent=c.hanzi;pinyinEl.textContent=c.pinyin;meaningEl.textContent=c.meaning;
+    face.classList.toggle("flipped",state.flipped);
+  }
   const face=document.getElementById("face");
   const hanziEl=document.getElementById("hanzi");
   const pinyinEl=document.getElementById("pinyin");
   const meaningEl=document.getElementById("meaning");
-  const statsEl=document.getElementById("stats");
   const statsDlg=document.getElementById("statsDlg");
   const statsTable=document.getElementById("statsTable");
-  const player=new Audio();
 
-  function render(){
-    const c=current();
-    hanziEl.textContent=c.hanzi;
-    pinyinEl.textContent=c.pinyin;
-    meaningEl.textContent=c.meaning;
-    face.classList.toggle("flipped",state.flipped);
-    const due=state.cards.length;
-    statsEl.textContent=`${due} cartes`;
-  }
-  function flip(){state.flipped=!state.flipped;save();render();}
-  function answer(good){state.flipped=false;save();render();}
+  function flip(){state.flipped=!state.flipped;render();}
+  function answer(good){render();}
+  function openStats(){statsTable.textContent="Cartes : "+state.cards.length;statsDlg.showModal();}
 
-  async function playAudio(){
-    const c=current();
-    const url=c.audio||guessAudioURL(c.hanzi);
-    try{player.src=url;await player.play();}catch(e){console.warn("no audio",e);}
-  }
-  function openStats(){
-    statsTable.textContent="Stats: "+state.cards.length+" cartes";
-    statsDlg.showModal();
-  }
-
-  // Gestes
-  let startX=null,startY=null,longPressTimer=null;
   face.addEventListener("click",flip);
-  face.addEventListener("touchstart",e=>{
-    const t=e.changedTouches[0];startX=t.clientX;startY=t.clientY;
-    longPressTimer=setTimeout(()=>{
-      if(startX<window.innerWidth/2 && startY>window.innerHeight*0.7) openStats();
-      else playAudio();
-    },500);
-  },{passive:true});
-  face.addEventListener("touchmove",e=>{
-    const t=e.changedTouches[0];if(Math.abs(t.clientX-startX)>8)clearTimeout(longPressTimer);
-  },{passive:true});
-  face.addEventListener("touchend",e=>{
-    clearTimeout(longPressTimer);
-    const dx=e.changedTouches[0].clientX-startX;
-    if(Math.abs(dx)>8){
-      const cls=dx>0?"swipe-right":"swipe-left";
-      face.classList.add(cls);
-      face.addEventListener("animationend",()=>{
-        face.classList.remove(cls);
-        pickNext();
-      },{once:true});
-    }
-  },{passive:true});
 
-  pickNext();
+  let startX=null,startY=null,longPressTimer=null,longPressFired=false;
+  cardArea.addEventListener("touchstart",e=>{
+    const t=e.changedTouches[0];startX=t.clientX;startY=t.clientY;longPressFired=false;
+    longPressTimer=setTimeout(()=>{
+      longPressFired=true;
+      if(startX<window.innerWidth/2 && startY>window.innerHeight*0.7) openStats();
+      else console.log("🔊 jouer audio ici");
+    },500);
+  });
+  cardArea.addEventListener("touchmove",e=>{
+    const t=e.changedTouches[0];if(Math.abs(t.clientX-startX)>10||Math.abs(t.clientY-startY)>10)clearTimeout(longPressTimer);
+  });
+  cardArea.addEventListener("touchend",e=>{
+    clearTimeout(longPressTimer);
+    const dx=e.changedTouches[0].clientX-startX,dy=e.changedTouches[0].clientY-startY;
+    if(Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)){
+      const cls=dx>0?"swipe-right":"swipe-left";face.classList.add(cls);
+      face.addEventListener("animationend",()=>{face.classList.remove(cls);answer(dx>0);},{once:true});
+    }
+  });
+
+  render();
 })();
 </script>
 </body>
