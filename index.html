@@ -61,14 +61,14 @@
     .small{font-size:12px;color:var(--muted)}
     .right{display:flex;gap:10px;align-items:center}
 
-    /* ---- Mobile épuré : uniquement la carte visible ---- */
+    /* Mobile épuré */
     @media (max-width:640px){
       header, .controls, .deck-tools { display:none !important; }
       .wrap{ padding-top: env(safe-area-inset-top); }
       .face{ max-height: 78vh; }
     }
 
-    /* ---- Drag/Swipe animation ---- */
+    /* Drag/Swipe animation */
     .face.dragging{ transition:none; will-change: transform, box-shadow; }
     .face.drag-right{ box-shadow:0 20px 40px rgba(46,204,113,.25); }
     .face.drag-left { box-shadow:0 20px 40px rgba(255,92,92,.25); }
@@ -77,7 +77,7 @@
     .swipe-right { animation: swipeRight .25s ease-out forwards; }
     .swipe-left  { animation: swipeLeft  .25s ease-out forwards; }
 
-    /* ---- Stats popover ---- */
+    /* Stats popover */
     #statsPopover{
       position: fixed; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
       width: min(460px, 92vw); max-height: 55vh; overflow:auto;
@@ -148,7 +148,7 @@
       <div class="small">
         Colonnes : caractère — pinyin — traduction — (optionnel) URL mp3.
         Si audio vide, l’app cherche <code>./audios/&lt;HANZI&gt;.mp3</code>.<br>
-        <em>Par défaut, l’import FUSIONNE et conserve les stats. Coche “Remplacer tout (avancé)” pour reconstruire le deck depuis le TSV en réassignant les stats par clé.</em>
+        <em>Par défaut, l’import FUSIONNE et conserve les stats. Coche “Remplacer tout (avancé)” pour reconstruire le deck depuis le TSV en réassignant les stats par clé (hanzi+pinyin).</em>
       </div>
       <textarea id="tsv"></textarea>
       <div class="row">
@@ -167,13 +167,16 @@
   // ====== CONFIG ======
   const AUDIO_DIR = "./audios";
   const DEFAULT_TSV = `我\twǒ\tje / moi\n你\tnǐ\ttu / toi\n今天\tjīntiān\taujourd'hui`;
-  const LS_KEY = "cn_flash_audio_tsv_v5"; // garde la même clé pour compat
+  const LS_KEY = "cn_flash_audio_tsv_v5";
 
   const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
 
-  // ====== Utils (clé stable & audio) ======
+  // ====== Utils ======
   function makeKey(h,p){ return (String(h||"").trim()+"|"+String(p||"").trim().toLowerCase()); }
   function guessAudioURL(h){ return `${AUDIO_DIR}/${encodeURIComponent(String(h).trim())}.mp3`; }
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+  function now(){ return Date.now(); }
+  function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
 
   // ====== TSV ======
   function parseTSV(tsv){
@@ -192,23 +195,23 @@
 
   // ====== State ======
   let state = loadState();
+
   function loadState(){
     try{
       const raw = localStorage.getItem(LS_KEY);
       if(raw){
         const obj = JSON.parse(raw);
         if(Array.isArray(obj.cards) && obj.cards.length){
-          // rétro-compat : ajoute la clé si absente
           for(const c of obj.cards){
             if(!c.key) c.key = makeKey(c.hanzi, c.pinyin);
+            if(!c.id) c.id = c.key;
           }
-          if(!obj.currentId && obj.cards[0]) obj.currentId = obj.cards[0].id || obj.cards[0].key;
+          if(!obj.currentId && obj.cards[0]) obj.currentId = obj.cards[0].id;
           save(obj);
           return obj;
         }
       }
     }catch(e){}
-    // init avec TSV par défaut
     const rows = parseTSV(DEFAULT_TSV);
     const cards = rows.map((c)=>({
       id: c.key, key:c.key, hanzi:c.hanzi, pinyin:c.pinyin, meaning:c.meaning,
@@ -218,17 +221,38 @@
     const st = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
     save(st); return st;
   }
+
   function save(o=state){ localStorage.setItem(LS_KEY, JSON.stringify(o)); }
-  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
-  function now(){ return Date.now(); }
   function current(){ return state.cards.find(c=>c.id===state.currentId)||state.cards[0]; }
 
-  function pickNext(){
-    const due = state.cards.filter(c=>c.nextDue<=now());
-    let next = null;
-    if(due.length){ due.sort((a,b)=>a.score-b.score || a.seen-b.seen); next = due[0]; }
-    else{ next = state.cards.slice().sort((a,b)=>a.nextDue-b.nextDue)[0]; }
-    state.currentId = next.id; state.flipped = false; save(); render();
+  // ====== Picking (avec correctif anti-boucle) ======
+  function stableSort(a,b){
+    return (a.score - b.score) ||
+           (a.seen - b.seen) ||
+           String(a.key).localeCompare(String(b.key));
+  }
+
+  function pickNext(prevId=null){
+    const t = now();
+    let due = state.cards.filter(c => c.nextDue <= t);
+
+    if(due.length){
+      if(prevId && due.length > 1){
+        due = due.filter(c => c.id !== prevId);
+      }
+      due.sort(stableSort);
+      state.currentId = due[0].id;
+    } else {
+      let pool = state.cards.slice().sort((a,b)=> (a.nextDue - b.nextDue) || stableSort(a,b));
+      if(prevId && pool.length > 1 && pool[0].id === prevId){
+        state.currentId = pool[1].id;
+      } else {
+        state.currentId = pool[0].id;
+      }
+    }
+    state.flipped = false; 
+    save(); 
+    render();
   }
 
   // ====== UI refs ======
@@ -260,7 +284,7 @@
     try{
       if(player.src !== url) player.src = url;
       await player.play(); return;
-    }catch(e){ /* fallback synthèse */ }
+    }catch(e){}
     if('speechSynthesis' in window){
       const u = new SpeechSynthesisUtterance((c.hanzi||c.pinyin||"")+"");
       const voices = speechSynthesis.getVoices();
@@ -269,7 +293,12 @@
     }
   }
 
-  // ====== Render ======
+  // ====== Rendering ======
+  function masteredCount(){
+    const maxIdx = INTERVALS.length - 1;
+    return state.cards.filter(c=>c.score>=maxIdx).length;
+  }
+
   function render(){
     const c = current();
     hanziEl.textContent = c.hanzi||"";
@@ -282,23 +311,26 @@
     resetFaceTransform();
   }
 
-  function masteredCount(){
-    const maxIdx = INTERVALS.length - 1;
-    return state.cards.filter(c=>c.score>=maxIdx).length;
-  }
-
   function flip(){ state.flipped=!state.flipped; save(); render(); }
 
   function answer(good){
+    const prevId = state.currentId; // mémorise la carte courante
     const c = current();
     c.seen++;
-    if(good){ c.good++; c.score = Math.min(c.score+1, INTERVALS.length-1); c.nextDue = now()+INTERVALS[c.score]; }
-    else    { c.again++; c.score = Math.max(0, c.score-1); c.nextDue = now()+30e3; }
+    if(good){
+      c.good++;
+      c.score = Math.min(c.score+1, INTERVALS.length-1);
+      c.nextDue = now()+INTERVALS[c.score];
+    } else {
+      c.again++;
+      c.score = Math.max(0, c.score-1);
+      c.nextDue = now()+30e3;
+    }
     save();
-    pickNext();
+    pickNext(prevId); // évite de re-sélectionner la même si possible
   }
 
-  // ---- Desktop buttons ----
+  // ---- Buttons ----
   btnFlip?.addEventListener('click', ()=>flip());
   btnGood?.addEventListener('click', ()=>answer(true));
   btnAgain?.addEventListener('click', ()=>answer(false));
@@ -332,7 +364,6 @@
         for(const r of rows){
           const old = byKey.get(r.key);
           if(old){
-            // réassigner stats
             newCards.push({
               id: old.id, key:r.key, hanzi:r.hanzi, pinyin:r.pinyin, meaning:r.meaning,
               audio: r.audio || old.audio || "",
@@ -347,7 +378,6 @@
             added++;
           }
         }
-        // si currentId n'existe plus, pointe sur la première
         state.cards = newCards;
         if(!state.cards.find(c=>c.id===state.currentId) && state.cards[0]) state.currentId = state.cards[0].id;
         state.flipped = false;
@@ -357,12 +387,10 @@
         for(const r of rows){
           const old = byKey.get(r.key);
           if(old){
-            // met à jour contenu sans toucher aux stats
             old.hanzi = r.hanzi; old.pinyin = r.pinyin; old.meaning = r.meaning;
             if(r.audio) old.audio = r.audio;
             updated++;
           } else {
-            // nouvelle carte
             const nc = {
               id: r.key, key:r.key, hanzi:r.hanzi, pinyin:r.pinyin, meaning:r.meaning,
               audio: r.audio || "", score:0,nextDue:0,seen:0,good:0,again:0
@@ -371,12 +399,10 @@
             added++;
           }
         }
-        // légère randomisation des toutes nouvelles pour le fun
         shuffle(state.cards);
         save();
       }
 
-      // feedback
       importSummaryEl.textContent = `+${added} nouvelles · ${updated} mises à jour · ${reassigned} réassignées`;
       importSummaryEl.style.display = 'block';
 
@@ -409,7 +435,7 @@
     face.style.transform = '';
   }
 
-  // ---- Interactions mobile (tap / long press -> audio|stats / swipe) ----
+  // ---- Interactions mobile : tap / appui long (audio ou stats coin bas-gauche) / swipe ←/→ ----
   face.addEventListener('click', ()=>{ if(!longPressFired) flip(); longPressFired=false; });
 
   let startX=null,startY=null, longPressTimer=null, longPressFired=false, longPressMode=null;
@@ -421,7 +447,9 @@
     return withinLeft && withinBottom;
   }
 
-  cardArea.addEventListener('touchstart', (e)=>{
+  const cardAreaEl = document.getElementById('cardArea');
+
+  cardAreaEl.addEventListener('touchstart', (e)=>{
     const t = e.changedTouches[0]; startX=t.clientX; startY=t.clientY;
     face.classList.add('dragging');
     longPressFired=false;
@@ -433,7 +461,7 @@
     }, 500);
   }, {passive:true});
 
-  cardArea.addEventListener('touchmove', (e)=>{
+  cardAreaEl.addEventListener('touchmove', (e)=>{
     if(startX===null) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - startX, dy = t.clientY - startY;
@@ -449,7 +477,7 @@
     }
   }, {passive:true});
 
-  cardArea.addEventListener('touchend', (e)=>{
+  cardAreaEl.addEventListener('touchend', (e)=>{
     clearTimeout(longPressTimer);
     if(startX===null) return;
     const t = e.changedTouches[0];
@@ -499,8 +527,6 @@
     }
     statsBody.innerHTML = rows.join("");
   }
-
-  function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
 
   // Boot
   pickNext();
