@@ -57,27 +57,27 @@
     dialog::backdrop{background:rgba(0,0,0,.6)}
     .sheet{padding:16px;display:flex;flex-direction:column;gap:12px}
     textarea{width:100%;min-height:40vh;border-radius:10px;background:#0c0e15;color:var(--fg);border:1px solid #2a2a33;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
-    .row{display:flex;gap:10px;justify-content:flex-end}
+    .row{display:flex;gap:10px;justify-content:space-between;align-items:center}
     .small{font-size:12px;color:var(--muted)}
+    .right{display:flex;gap:10px;align-items:center}
 
-    /* ---- Mobile épuré : uniquement la carte visible ---- */
+    /* Mobile épuré */
     @media (max-width:640px){
       header, .controls, .deck-tools { display:none !important; }
       .wrap{ padding-top: env(safe-area-inset-top); }
       .face{ max-height: 78vh; }
     }
 
-    /* ---- Drag/Swipe animation (horizontale uniquement) ---- */
+    /* Drag/Swipe animation */
     .face.dragging{ transition:none; will-change: transform, box-shadow; }
     .face.drag-right{ box-shadow:0 20px 40px rgba(46,204,113,.25); }
     .face.drag-left { box-shadow:0 20px 40px rgba(255,92,92,.25); }
-
     @keyframes swipeRight { to { transform: translateX(120%) rotate(12deg); opacity:.0; } }
     @keyframes swipeLeft  { to { transform: translateX(-120%) rotate(-12deg); opacity:.0; } }
     .swipe-right { animation: swipeRight .25s ease-out forwards; }
     .swipe-left  { animation: swipeLeft  .25s ease-out forwards; }
 
-    /* ---- Stats popover bas-gauche ---- */
+    /* Stats popover */
     #statsPopover{
       position: fixed; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
       width: min(460px, 92vw); max-height: 55vh; overflow:auto;
@@ -105,9 +105,7 @@
 
     <div class="card" id="cardArea">
       <div class="face" id="face">
-        <div class="front">
-          <div class="hanzi" id="hanzi">我</div>
-        </div>
+        <div class="front"><div class="hanzi" id="hanzi">我</div></div>
         <div class="back">
           <div class="pinyin" id="pinyin">wǒ</div>
           <div class="meaning" id="meaning">je / moi</div>
@@ -116,7 +114,6 @@
       </div>
     </div>
 
-    <!-- Contrôles desktop (cachés sur mobile) -->
     <div class="controls">
       <button class="btn again" id="btnAgain">Encore</button>
       <button class="btn flip" id="btnFlip">Retourner</button>
@@ -137,9 +134,7 @@
     <div class="meta" id="statsMeta">–</div>
     <div style="overflow:auto; max-height:45vh;">
       <table id="statsTable">
-        <thead>
-          <tr><th>Hanzi</th><th>Pinyin</th><th>Statut</th><th>Vues</th></tr>
-        </thead>
+        <thead><tr><th>Hanzi</th><th>Pinyin</th><th>Statut</th><th>Vues</th></tr></thead>
         <tbody id="statsBody"></tbody>
       </table>
     </div>
@@ -150,12 +145,20 @@
   <dialog id="dlg">
     <div class="sheet">
       <strong>Importer un deck depuis TSV (Excel/Google Sheets)</strong>
-      <div class="small">Colonnes : caractère — pinyin — traduction — (optionnel) URL mp3. Si vide, l’app cherche <code>./audios/&lt;HANZI&gt;.mp3</code>.</div>
+      <div class="small">
+        Colonnes : caractère — pinyin — traduction — (optionnel) URL mp3.
+        Si audio vide, l’app cherche <code>./audios/&lt;HANZI&gt;.mp3</code>.<br>
+        <em>Par défaut, l’import FUSIONNE et conserve les stats. Coche “Remplacer tout (avancé)” pour reconstruire le deck depuis le TSV en réassignant les stats par clé (hanzi+pinyin).</em>
+      </div>
       <textarea id="tsv"></textarea>
       <div class="row">
-        <button class="link" id="cancelDlg">Annuler</button>
-        <button class="link" id="saveTsv">Importer</button>
+        <label class="small"><input type="checkbox" id="replaceAll"> Remplacer tout (avancé)</label>
+        <div class="right">
+          <button class="link" id="cancelDlg">Annuler</button>
+          <button class="link" id="saveTsv">Importer</button>
+        </div>
       </div>
+      <div class="small" id="importSummary" style="display:none;"></div>
     </div>
   </dialog>
 
@@ -164,7 +167,42 @@
   // ====== CONFIG ======
   const AUDIO_DIR = "./audios";
   const DEFAULT_TSV = `我\twǒ\tje / moi\n你\tnǐ\ttu / toi\n今天\tjīntiān\taujourd'hui`;
+  const LS_KEY = "cn_flash_audio_tsv_v5";
+  const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
+
+  // ====== Utils ======
+  function makeKey(h,p){ return (String(h||"").trim()+"|"+String(p||"").trim().toLowerCase()); }
   function guessAudioURL(h){ return `${AUDIO_DIR}/${encodeURIComponent(String(h).trim())}.mp3`; }
+  function now(){ return Date.now(); }
+  function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
+
+  // Dédoublonnage (fusionne stats et contenu le plus récent)
+  function dedupeCards(cards){
+    const byKey = new Map();
+    for(const c of cards){
+      const key = c.key || makeKey(c.hanzi, c.pinyin);
+      const id  = c.id  || key;
+      if(!byKey.has(key)){
+        byKey.set(key, {
+          id, key,
+          hanzi: c.hanzi, pinyin: c.pinyin, meaning: c.meaning,
+          audio: c.audio || "",
+          score: c.score||0, nextDue: c.nextDue||0, seen: c.seen||0, good: c.good||0, again: c.again||0
+        });
+      } else {
+        const a = byKey.get(key), b = c;
+        a.seen    = Math.max(a.seen,    b.seen||0);
+        a.good    = Math.max(a.good,    b.good||0);
+        a.again   = Math.max(a.again,   b.again||0);
+        a.score   = Math.max(a.score,   b.score||0);
+        a.nextDue = Math.max(a.nextDue, b.nextDue||0);
+        if(b.meaning && b.meaning!==a.meaning) a.meaning = b.meaning;
+        if(b.pinyin  && b.pinyin !==a.pinyin ) a.pinyin  = b.pinyin;
+        if(b.audio) a.audio = b.audio;
+      }
+    }
+    return Array.from(byKey.values());
+  }
 
   // ====== TSV ======
   function parseTSV(tsv){
@@ -174,39 +212,78 @@
       const line = raw.trim(); if(!line || line.startsWith("#")) continue;
       const cols = line.split(/\t+/); if(cols.length<3) continue;
       const [hanzi,pinyin,meaning,audio] = cols;
-      arr.push({hanzi:hanzi.trim(),pinyin:(pinyin||"").trim(),meaning:(meaning||"").trim(),audio:(audio||"").trim()});
+      const h = (hanzi||"").trim(), p=(pinyin||"").trim(), m=(meaning||"").trim(), a=(audio||"").trim();
+      const key = makeKey(h,p);
+      arr.push({key, hanzi:h, pinyin:p, meaning:m, audio:a});
     }
     return arr;
   }
 
-  // ====== SRS ======
-  const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
-  const LS_KEY = "cn_flash_audio_tsv_v5";
-
+  // ====== State ======
   let state = loadState();
   function loadState(){
     try{
       const raw = localStorage.getItem(LS_KEY);
-      if(raw){ const obj=JSON.parse(raw); if(Array.isArray(obj.cards)&&obj.cards.length) return obj; }
+      if(raw){
+        const obj = JSON.parse(raw);
+        if(Array.isArray(obj.cards) && obj.cards.length){
+          for(const c of obj.cards){
+            if(!c.key) c.key = makeKey(c.hanzi, c.pinyin);
+            if(!c.id)  c.id  = c.key;
+          }
+          obj.cards = dedupeCards(obj.cards);
+          if(!obj.currentId && obj.cards[0]) obj.currentId = obj.cards[0].id;
+          save(obj);
+          return obj;
+        }
+      }
     }catch(e){}
     const rows = parseTSV(DEFAULT_TSV);
-    const cards = rows.map((c,i)=>({id:i+"_"+c.hanzi, ...c, score:0,nextDue:0,seen:0,good:0,again:0}));
-    if(!cards.length){ cards.push({id:"0_我",hanzi:"我",pinyin:"wǒ",meaning:"je / moi",audio:"",score:0,nextDue:0,seen:0,good:0,again:0}); }
-    shuffle(cards);
+    const cards = rows.map((c)=>({
+      id: c.key, key:c.key, hanzi:c.hanzi, pinyin:c.pinyin, meaning:c.meaning,
+      audio:c.audio||"", score:0,nextDue:0,seen:0,good:0,again:0
+    }));
     const st = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
     save(st); return st;
   }
   function save(o=state){ localStorage.setItem(LS_KEY, JSON.stringify(o)); }
-  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
-  function now(){ return Date.now(); }
   function current(){ return state.cards.find(c=>c.id===state.currentId)||state.cards[0]; }
 
-  function pickNext(){
-    const due = state.cards.filter(c=>c.nextDue<=now());
-    let next = null;
-    if(due.length){ due.sort((a,b)=>a.score-b.score || a.seen-b.seen); next = due[0]; }
-    else{ next = state.cards.slice().sort((a,b)=>a.nextDue-b.nextDue)[0]; }
-    state.currentId = next.id; state.flipped = false; save(); render();
+  // ====== Picking (anti-boucle + tri stable) ======
+  function stableSort(a,b){
+    return (a.score - b.score) ||
+           (a.seen  - b.seen ) ||
+           (a.nextDue - b.nextDue) ||
+           String(a.key).localeCompare(String(b.key));
+  }
+
+  function pickNext(prevId=null){
+    const t = now();
+    let due = state.cards.filter(c => (c.nextDue||0) <= t);
+
+    if(due.length){
+      if(prevId && due.length > 1){
+        const filtered = due.filter(c => c.id !== prevId);
+        if(filtered.length) due = filtered;
+      }
+      due.sort(stableSort);
+      state.currentId = due[0].id;
+    } else {
+      const pool = state.cards.slice().sort((a,b)=> (a.nextDue - b.nextDue) || stableSort(a,b));
+      if(prevId && pool.length > 1 && pool[0].id === prevId){
+        state.currentId = pool[1].id;
+      } else {
+        state.currentId = pool[0].id;
+      }
+    }
+
+    if(!state.cards.find(c=>c.id===state.currentId) && state.cards[0]){
+      state.currentId = state.cards[0].id;
+    }
+
+    state.flipped = false;
+    save();
+    render();
   }
 
   // ====== UI refs ======
@@ -227,14 +304,10 @@
   const tsvTA = document.getElementById('tsv');
   const cancelDlgBtn = document.getElementById('cancelDlg');
   const saveTsvBtn = document.getElementById('saveTsv');
+  const replaceAllCb = document.getElementById('replaceAll');
+  const importSummaryEl = document.getElementById('importSummary');
 
-  // Stats popover
-  const statsPopover = document.getElementById('statsPopover');
-  const statsMeta = document.getElementById('statsMeta');
-  const statsBody = document.getElementById('statsBody');
-  const closeStatsBtn = document.getElementById('closeStatsBtn');
-
-  // ====== Audio + fallback ======
+  // ====== Audio ======
   const player = new Audio(); player.preload="none";
   async function playAudio(){
     const c = current(); if(!c) return;
@@ -242,7 +315,7 @@
     try{
       if(player.src !== url) player.src = url;
       await player.play(); return;
-    }catch(e){ console.warn("Audio KO, fallback synthèse", e); }
+    }catch(e){}
     if('speechSynthesis' in window){
       const u = new SpeechSynthesisUtterance((c.hanzi||c.pinyin||"")+"");
       const voices = speechSynthesis.getVoices();
@@ -251,7 +324,12 @@
     }
   }
 
-  // ====== Render ======
+  // ====== Rendering ======
+  function masteredCount(){
+    const maxIdx = INTERVALS.length - 1;
+    return state.cards.filter(c=>c.score>=maxIdx).length;
+  }
+
   function render(){
     const c = current();
     hanziEl.textContent = c.hanzi||"";
@@ -261,52 +339,124 @@
     const dueCount = state.cards.filter(x=>x.nextDue<=now()).length;
     const mastered = masteredCount();
     statsEl.textContent = `${dueCount} dûes · ${mastered} maîtrisées`;
-    resetFaceTransform(); // sécurité: toujours recentrer visuellement
-  }
-
-  function masteredCount(){
-    const maxIdx = INTERVALS.length - 1;
-    return state.cards.filter(c=>c.score>=maxIdx).length;
+    resetFaceTransform();
   }
 
   function flip(){ state.flipped=!state.flipped; save(); render(); }
 
   function answer(good){
+    const prevId = state.currentId;
     const c = current();
-    c.seen++;
-    if(good){ c.good++; c.score = Math.min(c.score+1, INTERVALS.length-1); c.nextDue = now()+INTERVALS[c.score]; }
-    else    { c.again++; c.score = Math.max(0, c.score-1); c.nextDue = now()+30e3; }
+    c.seen = (c.seen||0) + 1;
+    if(good){
+      c.good = (c.good||0) + 1;
+      c.score = Math.min((c.score||0)+1, INTERVALS.length-1);
+      c.nextDue = now() + INTERVALS[c.score];
+    } else {
+      c.again = (c.again||0) + 1;
+      c.score = Math.max((c.score||0)-1, 0);
+      c.nextDue = now() + 30e3;
+    }
     save();
-    pickNext();
+    pickNext(prevId);
   }
 
-  // ---- Desktop buttons (cachés sur mobile) ----
+  // ---- Buttons ----
   btnFlip?.addEventListener('click', ()=>flip());
   btnGood?.addEventListener('click', ()=>answer(true));
   btnAgain?.addEventListener('click', ()=>answer(false));
   btnSound?.addEventListener('click', ()=>playAudio());
   btnImport?.addEventListener('click', ()=>{
     const tsv = state.cards.map(({hanzi,pinyin,meaning,audio})=>[hanzi,pinyin,meaning,audio||""].join("\t")).join("\n");
-    tsvTA.value = tsv || DEFAULT_TSV; dlg.showModal();
+    tsvTA.value = tsv || DEFAULT_TSV;
+    replaceAllCb.checked = false;
+    importSummaryEl.style.display = 'none';
+    importSummaryEl.textContent = "";
+    dlg.showModal();
   });
   cancelDlgBtn?.addEventListener('click', ()=> dlg.close());
+
+  // ====== Import (fusion par défaut + remplacer tout) ======
   saveTsvBtn?.addEventListener('click', ()=>{
     try{
-      const rows = parseTSV(tsvTA.value); if(!rows.length) throw new Error();
-      const cards = rows.map((c,i)=>({id:i+"_"+(c.hanzi||("id"+i)), ...c, score:0,nextDue:0,seen:0,good:0,again:0}));
-      shuffle(cards);
-      state = {cards, currentId: cards[0].id, flipped:false, createdAt: Date.now()};
-      save(); dlg.close(); render();
-    }catch(e){ alert("Format: caractère\\tpinyin\\ttraduction[\\taudio]"); }
-  });
-  resetBtn?.addEventListener('click', ()=>{
-    if(confirm("Remise à zéro ?")){
-      localStorage.removeItem(LS_KEY); state = loadState(); render();
+      const rows = parseTSV(tsvTA.value);
+      if(!rows.length) throw new Error();
+
+      const replaceAll = !!replaceAllCb.checked;
+
+      // index existant par clé
+      const byKey = new Map();
+      for(const c of state.cards){ byKey.set(c.key || makeKey(c.hanzi,c.pinyin), c); }
+
+      let added=0, updated=0, reassigned=0;
+
+      if(replaceAll){
+        const newCards = [];
+        for(const r of rows){
+          const old = byKey.get(r.key);
+          if(old){
+            newCards.push({
+              id: old.id, key:r.key, hanzi:r.hanzi, pinyin:r.pinyin, meaning:r.meaning,
+              audio: r.audio || old.audio || "",
+              score: old.score||0, nextDue: old.nextDue||0, seen: old.seen||0, good: old.good||0, again: old.again||0
+            });
+            reassigned++;
+          }else{
+            newCards.push({
+              id: r.key, key:r.key, hanzi:r.hanzi, pinyin:r.pinyin, meaning:r.meaning,
+              audio: r.audio || "", score:0,nextDue:0,seen:0,good:0,again:0
+            });
+            added++;
+          }
+        }
+        state.cards = dedupeCards(newCards);
+        if(!state.cards.find(c=>c.id===state.currentId) && state.cards[0]) state.currentId = state.cards[0].id;
+        state.flipped = false;
+        save();
+      } else {
+        // FUSION : maj si existe, sinon ajoute; on ne supprime rien
+        for(const r of rows){
+          const old = byKey.get(r.key);
+          if(old){
+            old.hanzi = r.hanzi; old.pinyin = r.pinyin; old.meaning = r.meaning;
+            if(r.audio) old.audio = r.audio;
+            updated++;
+          } else {
+            const nc = {
+              id: r.key, key:r.key, hanzi:r.hanzi, pinyin:r.pinyin, meaning:r.meaning,
+              audio: r.audio || "", score:0,nextDue:0,seen:0,good:0,again:0
+            };
+            state.cards.push(nc);
+            added++;
+          }
+        }
+        state.cards = dedupeCards(state.cards); // nettoie les doublons potentiels
+        save();
+      }
+
+      importSummaryEl.textContent = `+${added} nouvelles · ${updated} mises à jour · ${reassigned} réassignées`;
+      importSummaryEl.style.display = 'block';
+
+      dlg.close();
+      render();
+    }catch(e){
+      alert("Format attendu : caractère\\tpinyin\\ttraduction[\\taudio]");
     }
   });
+
+  resetBtn?.addEventListener('click', ()=>{
+    if(confirm("Remise à zéro ?")){
+      localStorage.removeItem(LS_KEY);
+      state = loadState();
+      state.cards = dedupeCards(state.cards);
+      save();
+      render();
+    }
+  });
+
   exportBtn?.addEventListener('click', ()=>{
     const data = {
-      deck: state.cards.map(({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again})=>({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again})),
+      deck: state.cards.map(({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again,key,id})=>({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again,key,id})),
       exportedAt: new Date().toISOString()
     };
     const blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
@@ -317,7 +467,7 @@
   // ===== Helpers reset transform =====
   function resetFaceTransform(){
     face.classList.remove('dragging','drag-right','drag-left','swipe-right','swipe-left');
-    face.style.transform = ''; // re-centre visuellement
+    face.style.transform = '';
   }
 
   // ---- Interactions mobile : tap / appui long (audio ou stats coin bas-gauche) / swipe ←/→ ----
@@ -327,16 +477,17 @@
 
   function inBottomLeftCorner(x,y){
     const r = face.getBoundingClientRect();
-    const withinLeft = (x - r.left) <= r.width * 0.35;       // 35% largeur gauche
-    const withinBottom = (r.bottom - y) <= r.height * 0.35;   // 35% hauteur bas
+    const withinLeft = (x - r.left) <= r.width * 0.35;
+    const withinBottom = (r.bottom - y) <= r.height * 0.35;
     return withinLeft && withinBottom;
   }
 
-  cardArea.addEventListener('touchstart', (e)=>{
+  const cardAreaEl = document.getElementById('cardArea');
+
+  cardAreaEl.addEventListener('touchstart', (e)=>{
     const t = e.changedTouches[0]; startX=t.clientX; startY=t.clientY;
     face.classList.add('dragging');
     longPressFired=false;
-    // Détermine si l'appui long vise les stats ou l'audio
     longPressMode = inBottomLeftCorner(startX, startY) ? 'stats' : 'audio';
     longPressTimer = setTimeout(()=>{
       longPressFired = true;
@@ -345,69 +496,56 @@
     }, 500);
   }, {passive:true});
 
-  cardArea.addEventListener('touchmove', (e)=>{
+  cardAreaEl.addEventListener('touchmove', (e)=>{
     if(startX===null) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - startX, dy = t.clientY - startY;
-
-    // dès qu'on bouge, on annule l'appui long
     if(Math.abs(dx)>10 || Math.abs(dy)>10){ clearTimeout(longPressTimer); }
-
-    // n'appliquer l'effet de drag QUE si geste majoritairement horizontal
     if(Math.abs(dx) > Math.abs(dy)){
       const rot = dx/20;
       face.style.transform = `translateX(${dx}px) rotate(${rot}deg) ${state.flipped?'rotateY(180deg)':''}`;
       face.classList.toggle('drag-right', dx>0);
       face.classList.toggle('drag-left', dx<0);
     } else {
-      // pas d'animation horizontale → éviter halo rouge/vert parasite
       face.classList.remove('drag-right','drag-left');
       face.style.transform = `${state.flipped?'rotateY(180deg)':''}`;
     }
   }, {passive:true});
 
-  cardArea.addEventListener('touchend', (e)=>{
+  cardAreaEl.addEventListener('touchend', (e)=>{
     clearTimeout(longPressTimer);
     if(startX===null) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - startX, dy = t.clientY - startY;
     const absX = Math.abs(dx), absY = Math.abs(dy);
-    const THX = 60; // seuil horizontal
+    const THX = 60;
 
-    // On retire visuels de drag
     face.classList.remove('dragging','drag-right','drag-left');
 
-    // Swipe horizontal seulement
     if(absX > absY && absX > THX){
       const cls = dx>0 ? 'swipe-right' : 'swipe-left';
       const good = dx>0;
-
-      // 1) anime
       face.classList.add(cls);
-
-      // 2) à la fin de l'anim: reset visuel, puis answer() (charge la suivante centrée)
       const onAnimEnd = ()=>{
         face.removeEventListener('animationend', onAnimEnd);
-        resetFaceTransform();     // ← re-centre AVANT de passer à la suivante
+        resetFaceTransform();
         answer(good);
       };
       face.addEventListener('animationend', onAnimEnd);
     } else {
-      // petit mouvement → juste reset
       resetFaceTransform();
     }
-
     startX=startY=null;
   }, {passive:true});
 
   // ====== Stats popover ======
-  function openStatsPopover(){
-    buildStatsTable();
-    statsPopover.style.display = 'block';
-  }
-  function closeStatsPopover(){
-    statsPopover.style.display = 'none';
-  }
+  const statsPopover = document.getElementById('statsPopover');
+  const statsMeta = document.getElementById('statsMeta');
+  const statsBody = document.getElementById('statsBody');
+  const closeStatsBtn = document.getElementById('closeStatsBtn');
+
+  function openStatsPopover(){ buildStatsTable(); statsPopover.style.display = 'block'; }
+  function closeStatsPopover(){ statsPopover.style.display = 'none'; }
   closeStatsBtn.addEventListener('click', closeStatsPopover);
 
   function buildStatsTable(){
@@ -415,7 +553,6 @@
     const mastered = state.cards.filter(c=>c.score>=maxIdx).sort((a,b)=>a.hanzi.localeCompare(b.hanzi));
     const learning = state.cards.filter(c=>c.score<maxIdx).sort((a,b)=>a.hanzi.localeCompare(b.hanzi));
     statsMeta.textContent = `${mastered.length} maîtrisées · ${learning.length} en cours · ${state.cards.length} cartes`;
-
     const rows = [];
     for(const c of mastered){
       rows.push(`<tr><td>${escapeHTML(c.hanzi)}</td><td>${escapeHTML(c.pinyin||"")}</td><td><span class="badge b-good">Maîtrisée</span></td><td>${c.seen}</td></tr>`);
@@ -425,8 +562,6 @@
     }
     statsBody.innerHTML = rows.join("");
   }
-
-  function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
 
   // Boot
   pickNext();
