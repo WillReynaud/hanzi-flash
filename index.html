@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Hanzi Flash — Clean Mobile + Corner Stats</title>
+  <title>Hanzi Flash — Clean Mobile + Corner Stats (anti-repeat)</title>
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.webmanifest">
@@ -170,11 +170,26 @@
   const LS_KEY = "cn_flash_audio_tsv_v5";
   const INTERVALS = [0, 60e3, 10*60e3, 60*60e3, 24*60*60e3, 3*24*60*60e3];
 
+  // Anti-repeat (éviter boucles)
+  const RECENT_WINDOW = 3;           // garder les 3 dernières cartes servies
+  let recentIds = [];                // FIFO des derniers IDs servis
+  function remember(id){
+    if(!id) return;
+    recentIds.push(id);
+    if(recentIds.length > RECENT_WINDOW) recentIds.shift();
+  }
+
   // ====== Utils ======
   function makeKey(h,p){ return (String(h||"").trim()+"|"+String(p||"").trim().toLowerCase()); }
   function guessAudioURL(h){ return `${AUDIO_DIR}/${encodeURIComponent(String(h).trim())}.mp3`; }
   function now(){ return Date.now(); }
   function escapeHTML(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
+  function norm(s){
+    return String(s ?? "")
+      .replace(/\u200b|\ufeff/g,"")  // zero-width & BOM
+      .replace(/\r\n?/g,"\n")
+      .trim();
+  }
 
   // Dédoublonnage (fusionne stats et contenu le plus récent)
   function dedupeCards(cards){
@@ -206,17 +221,22 @@
 
   // ====== TSV ======
   function parseTSV(tsv){
-    const lines = (tsv||"").replace(/\r\n?/g,"\n").split("\n");
-    const arr = [];
+    const lines = norm(tsv).split("\n");
+    const rawArr = [];
     for(const raw of lines){
-      const line = raw.trim(); if(!line || line.startsWith("#")) continue;
-      const cols = line.split(/\t+/); if(cols.length<3) continue;
+      const line = raw.trim();
+      if(!line || line.startsWith("#")) continue;
+      const cols = line.split(/\t+/);
+      if(cols.length < 3) continue;
       const [hanzi,pinyin,meaning,audio] = cols;
-      const h = (hanzi||"").trim(), p=(pinyin||"").trim(), m=(meaning||"").trim(), a=(audio||"").trim();
+      const h = norm(hanzi), p = norm(pinyin), m = norm(meaning), a = norm(audio||"");
+      if(!h || !p || !m) continue;
       const key = makeKey(h,p);
-      arr.push({key, hanzi:h, pinyin:p, meaning:m, audio:a});
+      rawArr.push({key, hanzi:h, pinyin:p, meaning:m, audio:a});
     }
-    return arr;
+    // Fusion par clé pour éviter doublons à la source
+    const fused = dedupeCards(rawArr.map(c=>({...c, id:c.key, score:0,nextDue:0,seen:0,good:0,again:0})));
+    return fused.map(({key,hanzi,pinyin,meaning,audio})=>({key,hanzi,pinyin,meaning,audio}));
   }
 
   // ====== State ======
@@ -228,6 +248,8 @@
         const obj = JSON.parse(raw);
         if(Array.isArray(obj.cards) && obj.cards.length){
           for(const c of obj.cards){
+            c.hanzi = norm(c.hanzi); c.pinyin = norm(c.pinyin); c.meaning = norm(c.meaning);
+            if(c.audio) c.audio = norm(c.audio);
             if(!c.key) c.key = makeKey(c.hanzi, c.pinyin);
             if(!c.id)  c.id  = c.key;
           }
@@ -259,28 +281,43 @@
 
   function pickNext(prevId=null){
     const t = now();
+    // 1) pool des cartes dues
     let due = state.cards.filter(c => (c.nextDue||0) <= t);
 
+    // helper: choisit un candidat en évitant prevId + recentIds
+    function choose(list){
+      if(!list.length) return null;
+      const ranked = list.slice().sort(stableSort);
+      // a) éviter prevId + récentes
+      let cand = ranked.find(c => c.id !== prevId && !recentIds.includes(c.id));
+      if(cand) return cand;
+      // b) éviter au moins prevId
+      cand = ranked.find(c => c.id !== prevId);
+      if(cand) return cand;
+      // c) sinon, prends le premier
+      return ranked[0];
+    }
+
+    let chosen = null;
     if(due.length){
-      if(prevId && due.length > 1){
-        const filtered = due.filter(c => c.id !== prevId);
-        if(filtered.length) due = filtered;
-      }
-      due.sort(stableSort);
-      state.currentId = due[0].id;
-    } else {
+      chosen = choose(due);
+    }
+    if(!chosen){
+      // 2) rien de dû → prendre les plus proches (ou si due coincé par anti-repeat)
       const pool = state.cards.slice().sort((a,b)=> (a.nextDue - b.nextDue) || stableSort(a,b));
-      if(prevId && pool.length > 1 && pool[0].id === prevId){
-        state.currentId = pool[1].id;
-      } else {
-        state.currentId = pool[0].id;
-      }
+      chosen = choose(pool);
     }
 
-    if(!state.cards.find(c=>c.id===state.currentId) && state.cards[0]){
-      state.currentId = state.cards[0].id;
+    // filet
+    if(!chosen){
+      if(state.cards[0]) chosen = state.cards[0];
+      else return; // pas de carte
     }
 
+    // mémoriser précédente (pour anti-repeat)
+    if(prevId) remember(prevId);
+
+    state.currentId = chosen.id;
     state.flipped = false;
     save();
     render();
@@ -358,6 +395,7 @@
       c.nextDue = now() + 30e3;
     }
     save();
+    remember(prevId);     // <— renforce l’anti-repeat
     pickNext(prevId);
   }
 
@@ -384,7 +422,6 @@
 
       const replaceAll = !!replaceAllCb.checked;
 
-      // index existant par clé
       const byKey = new Map();
       for(const c of state.cards){ byKey.set(c.key || makeKey(c.hanzi,c.pinyin), c); }
 
@@ -430,7 +467,7 @@
             added++;
           }
         }
-        state.cards = dedupeCards(state.cards); // nettoie les doublons potentiels
+        state.cards = dedupeCards(state.cards);
         save();
       }
 
@@ -444,16 +481,19 @@
     }
   });
 
+  const resetBtn = document.getElementById('reset');
   resetBtn?.addEventListener('click', ()=>{
     if(confirm("Remise à zéro ?")){
       localStorage.removeItem(LS_KEY);
       state = loadState();
       state.cards = dedupeCards(state.cards);
+      recentIds = []; // reset anti-repeat mémoire
       save();
       render();
     }
   });
 
+  const exportBtn = document.getElementById('exportJson');
   exportBtn?.addEventListener('click', ()=>{
     const data = {
       deck: state.cards.map(({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again,key,id})=>({hanzi,pinyin,meaning,audio,score,nextDue,seen,good,again,key,id})),
